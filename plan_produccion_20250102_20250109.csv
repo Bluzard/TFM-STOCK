@@ -1,0 +1,7 @@
+Fecha Inicio;02/01/2025;;;;;;;;
+Fecha Fin;09/01/2025;;;;;;;;
+;;;;;;;;;;;
+;;;;;;;;;;;
+COD_ART;NOM_ART;stock_total;demanda_diaria;cajas_a_producir;horas_necesarias;cobertura_final
+432501;Pan Bocadillo con Salvado Easy;0.0;0.44666666666666666;374.01412;2.0;837.3450447761194
+453233;Panecillo 100% Integral;0.0;0.006666666666666667;227.26546;2.0;34089.818999999996
