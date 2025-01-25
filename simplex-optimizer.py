@@ -13,50 +13,84 @@ class ProductionPlanner:
         self.safety_stock_days = safety_stock_days
         self.min_production_hours = min_production_hours
 
-    def load_data(self, folder_path="Dataset"):
+    def load_data(self, folder_path="Dataset", fecha_inicio=None):
+        """    
+        Carga el archivo CSV que corresponde a la fecha de inicio proporcionada.
+        Args:
+        folder_path (str): Ruta del directorio con los archivos CSV.
+        fecha_inicio (str): Fecha de inicio en formato 'DD-MM-YYYY' o 'DD/MM/YYYY'.    
+        Returns:        pd.DataFrame: Datos procesados, o None si no se encuentra el archivo.
+        """
         try:
-            all_data = []
-            for file in os.listdir(folder_path):
-                if file.endswith('.csv'):
-                    file_path = os.path.join(folder_path, file)
-                    logger.info(f"Cargando archivo: {file}")
-                    
-                    # Leer la fecha del archivo
-                    with open(file_path, 'r', encoding='latin1') as f:
-                        date_str = f.readline().split(';')[1].strip().split()[0]
-                        logger.info(f"Fecha del archivo: {date_str}")
-                    
-                    # Leer el CSV
-                    df = pd.read_csv(file_path, sep=';', encoding='latin1', skiprows=4)
-                    df = df[df['COD_ART'].notna()]  # Eliminar filas sin código
-                    all_data.append(df)
+            # Normalizar la fecha para buscar en el nombre del archivo
+            if not fecha_inicio:
+                raise ValueError("Debe proporcionar una fecha de inicio.")
             
-            df = pd.concat(all_data, ignore_index=True)
+            # Convertir la fecha al formato esperado en los nombres de archivo
+            try:
+                fecha_normalizada = datetime.strptime(fecha_inicio.replace("/", "-"), "%d-%m-%Y").strftime("%d-%m-%y")
+            except ValueError as e:
+                raise ValueError("El formato de la fecha debe ser 'DD-MM-YYYY' o 'DD/MM/YYYY'.")
+            
+            # Buscar el archivo correspondiente
+            archivo_encontrado = None
+            for file in os.listdir(folder_path):
+                if file.endswith('.csv') and fecha_normalizada in file:
+                    archivo_encontrado = file
+                    break
+            
+            if not archivo_encontrado:
+                raise FileNotFoundError(f"No se encontró un archivo con la fecha: {fecha_normalizada}.")
+            
+            logger.info(f"Cargando archivo: {archivo_encontrado}")
+            file_path = os.path.join(folder_path, archivo_encontrado)
+            
+            # Leer la fecha del archivo
+            with open(file_path, 'r', encoding='latin1') as f:
+                date_str = f.readline().split(';')[1].strip().split()[0]
+                logger.info(f"Fecha del archivo: {date_str}")
+            
+            # Leer el CSV
+            df = pd.read_csv(file_path, sep=';', encoding='latin1', skiprows=4)
+            df = df[df['COD_ART'].notna()]  # Eliminar filas sin código
             
             # Convertir columnas numéricas
-            for col in ['Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 'Stock Externo']:
+            for col in ['Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 'Stock Externo', 'M_Vta -15 AA', 'M_Vta +15 AA']:
                 df[col] = pd.to_numeric(df[col].replace({'(en blanco)': '0', ',': '.'}, regex=True), errors='coerce')
             
             # Eliminar duplicados
             df = df.drop_duplicates(subset=['COD_ART'], keep='last')
             logger.info(f"Datos cargados: {len(df)} productos únicos")
-            
             return df
-            
         except Exception as e:
             logger.error(f"Error cargando datos: {str(e)}")
-            return None
+            return None, None, None
 
-    def generate_production_plan(self, df, available_hours, planning_days=7):
+    def generate_production_plan(self, df, available_hours, planning_days,fecha_inicio=None):
         try:
+            # Revisar formato de fecha_inicio
+            if isinstance(fecha_inicio, str):
+                fecha_inicio = datetime.strptime(fecha_inicio, "%d-%m-%Y")
+
             # Copiar solo las columnas necesarias
-            plan = df.copy()[['COD_ART', 'NOM_ART', 'Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 'Stock Externo']]
+            plan = df.copy()[['COD_ART', 'NOM_ART', 'Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 'Stock Externo', 'M_Vta -15 AA', 'M_Vta +15 AA' ]]
             
+            # Reemplazar comas en la columna NOM_ART
+            plan['NOM_ART'] = plan['NOM_ART'].str.replace(',', '?', regex=False) 
+
             # Calcular campos básicos
             plan['cajas_hora'] = plan['Cj/H']
             plan['stock_total'] = plan['Disponible'].fillna(0) + plan['Calidad'].fillna(0) + plan['Stock Externo'].fillna(0)
-            plan['demanda_diaria'] = plan['M_Vta -15'].fillna(0) / 15
             
+            #Completar demanda diaria con fórmula experta
+            plan['var_ex_AA_abs'] = abs(1 - plan['M_Vta +15 AA'] / plan['M_Vta -15 AA']).fillna(0)
+
+            # Calcular demanda_diaria usando np.where para aplicar la lógica basada en var_ex_AA_abs
+            plan['demanda_diaria'] = np.where(
+                plan['var_ex_AA_abs'] > 0.2,
+                plan['M_Vta -15'] * (1 - plan['M_Vta +15 AA'] / plan['M_Vta -15 AA']),
+                plan['M_Vta -15']
+            )
             # Filtrar productos válidos
             plan = plan[plan['cajas_hora'] > 0].copy()
             logger.info(f"Planificando producción para {len(plan)} productos")
@@ -64,7 +98,7 @@ class ProductionPlanner:
             # Calcular necesidades
             plan['cajas_necesarias'] = np.maximum(
                 0, 
-                (self.safety_stock_days * plan['demanda_diaria']) - plan['stock_total']
+                ((self.safety_stock_days + planning_days) * plan['demanda_diaria']) - plan['stock_total']
             )
             
             # Aplicar lote mínimo
@@ -91,7 +125,6 @@ class ProductionPlanner:
             plan_final = pd.DataFrame(productos_final)
             
             if not plan_final.empty:
-                fecha_inicio = datetime.now()
                 fecha_fin = fecha_inicio + timedelta(days=planning_days)
                 
                 # Guardar plan con fechas
@@ -131,11 +164,27 @@ class ProductionPlanner:
 
 def main():
     try:
+        # Solicitar parámetros al usuario
+        fecha_inicio = input("Ingrese la fecha de inicio (DD-MM-YYYY o DD/MM/YYYY): ").strip()
+        planning_days = int(input("Ingrese los días de planificación: "))
+        mantenimiento_hs = int(input("Ingrese las horas de mantenimiento en el período a planificar: "))
+        no_laborable_days = int(input("Ingrese los días no laborables en el período a planificar (inlcuyendo domingos): "))
+        
         planner = ProductionPlanner()
-        df = planner.load_data()
-        if df is not None:
-            plan, fecha_inicio, fecha_fin = planner.generate_production_plan(df, available_hours=24*7)
-            planner.generate_report(plan, fecha_inicio, fecha_fin)
+        df = planner.load_data(fecha_inicio=fecha_inicio)
+        
+        if df is None or df.empty:
+            logger.error("No se cargaron datos. Verifique que el archivo y la fecha sean correctos.")
+            return
+        
+        available_hours = 24 * (planning_days - no_laborable_days) - mantenimiento_hs
+        plan, fecha_inicio_dt, fecha_fin = planner.generate_production_plan(df, available_hours, planning_days, fecha_inicio)
+        
+        if plan is None or plan.empty:
+            logger.error("No se generó un plan de producción. Verifique los datos y parámetros.")
+            return
+        
+        planner.generate_report(plan, fecha_inicio_dt, fecha_fin)
     except Exception as e:
         logger.error(f"Error: {str(e)}")
 
