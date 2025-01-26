@@ -10,30 +10,33 @@ logger = logging.getLogger(__name__)
 
 class PlanificadorProduccion:
     def __init__(self):
+        ## Parámetros base para la planificación
         self.DIAS_STOCK_SEGURIDAD = 3
-        self.DIAS_MAX_COBERTURA = 15
-        self.MIN_VENTA_60D = 0
-        self.MIN_TASA_PRODUCCION = 0
-        self.UMBRAL_VARIACION = 0.20
-        self.COBERTURA_MAX_FINAL = 60
+        self.MIN_VENTA_60D = 0  ## Umbral mínimo de ventas en 60 días
+        self.MIN_TASA_PRODUCCION = 0  ## Tasa mínima de producción
+        self.UMBRAL_VARIACION = 0.20  ## Umbral de variación para ajuste de demanda
+        self.COBERTURA_MAX_FINAL = 60  ## Máxima cobertura de stock permitida
 
     def simplex(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
         try:
             dias_habiles = dias_planificacion - dias_no_habiles
-            
             df_work = df.copy()
-            # Filtros combinados
+            
+            ## Filtrar productos con demanda válida
             df_work = df_work[
-                (df_work['Vta -60'] > self.MIN_VENTA_60D) & 
-                (df_work['demanda_diaria'] > 0)
+                (df_work['Vta -60'] > self.MIN_VENTA_60D) &
+                (df_work['demanda_media'] > 0)
             ].copy()
             
-            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
-            df_work['demanda_periodo'] = (df_work['demanda_diaria'] * dias_habiles).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_diaria'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            ## Calcular cobertura actual y stock de seguridad
+            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_media']).round(2)
+            df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_habiles).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.DIAS_STOCK_SEGURIDAD).round(0)
             
+            ## Filtrar productos que necesitan producción
             df_work = df_work[
-                (df_work['stock_total'] < df_work['stock_seguridad']) 
+                (df_work['cobertura_actual'] <= self.COBERTURA_MAX_FINAL) &
+                (df_work['stock_total'] < df_work['stock_seguridad'])
             ]
             
             if df_work.empty:
@@ -42,25 +45,26 @@ class PlanificadorProduccion:
                 
             n_productos = len(df_work)
             
-            c = df_work['demanda_diaria'].values * -1
+            ## Función objetivo: minimizar diferencia entre stock actual y stock de seguridad
+            c = -df_work['demanda_media'].values  ## Priorizar productos con mayor demanda
             
+            ## Restricción de horas disponibles
             A_ub = np.zeros((1, n_productos))
             A_ub[0] = 1/df_work['Cj/H'].values
             b_ub = [horas_disponibles]
             
+            ## Restricción de stock mínimo
             A_lb = np.identity(n_productos)
             b_lb = df_work['stock_seguridad'].values - df_work['stock_total'].values
             
             A = np.vstack([A_ub, A_lb])
             b = np.concatenate([b_ub, b_lb])
             
-            bounds = [(0, None) for i in range(n_productos)]
-            
+            ## Resolver con Simplex
             result = linprog(
                 c,
                 A_ub=A, 
                 b_ub=b,
-                bounds=bounds,
                 method='highs'
             )
             
@@ -68,8 +72,10 @@ class PlanificadorProduccion:
                 logger.error(f"No se encontró solución óptima: {result.message}")
                 return None
                 
+            ## Obtener producción óptima
             produccion_optima = pd.Series(np.round(result.x, 0), index=df_work.index)
             
+            ## Calcular horas utilizadas
             horas_por_producto = produccion_optima / df_work['Cj/H']
             logger.info(f"Horas totales necesarias: {horas_por_producto.sum():.2f}")
             logger.info(f"Horas restantes: {horas_disponibles - horas_por_producto.sum():.2f}")
@@ -87,17 +93,22 @@ class PlanificadorProduccion:
             logger.info(f"Días hábiles para planificación: {dias_habiles}")
             
             df_work = df.copy()
-            df_work = df_work[df_work['demanda_diaria'] > 0].copy()  # Filtrar demanda 0
-            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
-            df_work['dias_cobertura'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
-            df_work['demanda_periodo'] = (df_work['demanda_diaria'] * dias_habiles).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_diaria'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            ## Filtrar productos con demanda positiva
+            df_work = df_work[df_work['demanda_media'] > 0].copy()
             
+            ## Calcular cobertura y necesidades
+            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_media']).round(2)
+            df_work['dias_cobertura'] = (df_work['stock_total'] / df_work['demanda_media']).round(2)
+            df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_habiles).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            
+            ## Calcular necesidad base de producción
             df_work['necesidad_base'] = df_work.apply(lambda row: max(
                 row['stock_seguridad'] - row['stock_total'],
                 row['demanda_periodo'] - (row['stock_total'] - row['stock_seguridad'])
             ), axis=1)
             
+            ## Filtrar productos que necesitan producción
             df_work = df_work[
                 (df_work['cobertura_actual'] <= self.COBERTURA_MAX_FINAL) &
                 (df_work['necesidad_base'] > 0)
@@ -107,12 +118,15 @@ class PlanificadorProduccion:
                 logger.error("No hay productos que requieran producción")
                 return None
 
+            ## Ordenar por días de cobertura
             df_work = df_work.sort_values('dias_cobertura', ascending=True)
             
+            ## Inicializar producción
             produccion_optima = pd.Series(0.0, index=df_work.index)
             horas_totales = 0.0
             horas_restantes = horas_disponibles
             
+            ## Calcular producción por producto
             for idx in df_work.index:
                 if horas_restantes < 2:
                     break
@@ -120,12 +134,15 @@ class PlanificadorProduccion:
                 producto = df_work.loc[idx]
                 necesidad = producto['necesidad_base']
                 
+                ## Calcular horas necesarias
                 horas_necesarias = necesidad / producto['Cj/H']
                 
+                ## Ajustar a mínimo 2 horas de producción
                 if 0 < horas_necesarias < 2:
                     horas_necesarias = 2
                     necesidad = horas_necesarias * producto['Cj/H']
                 
+                ## Ajustar si excede horas disponibles
                 if horas_necesarias > horas_restantes:
                     necesidad = horas_restantes * producto['Cj/H']
                     horas_necesarias = horas_restantes
@@ -146,10 +163,12 @@ class PlanificadorProduccion:
             return None
 
     def aplicar_filtros(self, df, fecha_inicio):
+        ## Filtros para selección de productos
         df_filtrado = df.copy()
         df_filtrado = df_filtrado[df_filtrado['Vta -60'] > self.MIN_VENTA_60D]
         df_filtrado = df_filtrado[df_filtrado['Cj/H'] > self.MIN_TASA_PRODUCCION]
         
+        ## Filtro de primera orden de fabricación
         df_filtrado['1ª OF'] = df_filtrado['1ª OF'].replace('(en blanco)', pd.NA)
         mask_of = ~df_filtrado['1ª OF'].notna() | (
             pd.to_datetime(df_filtrado['1ª OF'], format='%d/%m/%Y') > pd.to_datetime(fecha_inicio)
@@ -159,34 +178,41 @@ class PlanificadorProduccion:
         return df_filtrado.drop_duplicates(subset=['COD_ART'], keep='last')
 
     def calcular_demanda(self, df):
-        # Convertir a series de pandas antes de usar fillna
+        ## Preparar datos para cálculo de demanda
         df['M_Vta -15'] = pd.Series(df['M_Vta -15']).fillna(0)
         df['M_Vta -15 AA'] = pd.Series(df['M_Vta -15 AA']).replace(0, 1).fillna(1)
         df['M_Vta +15 AA'] = pd.Series(df['M_Vta +15 AA']).fillna(0)
         
+        ## Calcular variación interanual
         df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
         df['variacion_aa'] = pd.Series(df['variacion_aa']).fillna(0)
         
+        ## Cálculo de demanda media según las especificaciones
         demanda = np.where(
             df['variacion_aa'] > self.UMBRAL_VARIACION,
             df['M_Vta -15'] * (1 + df['variacion_aa']),
             df['M_Vta -15'] / 15
         )
-        df['demanda_diaria'] = pd.Series(demanda).fillna(0)
-        df['demanda_diaria'] = np.maximum(df['demanda_diaria'], 0)
+        
+        ## Asignar demanda diaria
+        df['demanda_media'] = pd.Series(demanda).fillna(0)
+        df['demanda_media'] = np.maximum(df['demanda_media'], 0)
         
         return df
 
     def cargar_datos(self, carpeta="Dataset", fecha_inicio=None):
         try:
+            ## Validar fecha de inicio
             if not fecha_inicio:
                 raise ValueError("Debe proporcionar una fecha de inicio.")
             
+            ## Normalizar fecha para búsqueda de archivo
             fecha_normalizada = datetime.strptime(
                 fecha_inicio.replace("/", "-"), 
                 "%d-%m-%Y"
             ).strftime("%d-%m-%y")
             
+            ## Encontrar archivo correspondiente
             archivo = next(
                 (f for f in os.listdir(carpeta) 
                  if f.endswith('.csv') and fecha_normalizada in f),
@@ -201,25 +227,30 @@ class PlanificadorProduccion:
             ruta_archivo = os.path.join(carpeta, archivo)
             logger.info(f"Cargando archivo: {ruta_archivo}")
             
+            ## Cargar archivo CSV
             df = pd.read_csv(ruta_archivo, sep=';', encoding='latin1', skiprows=4)
             df = df[df['COD_ART'].notna()]
             
+            ## Columnas numéricas a convertir
             columnas_numericas = ['Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 
                                 'Stock Externo', 'M_Vta -15 AA', 'M_Vta +15 AA', 
                                 'Vta -60']
             
+            ## Convertir columnas a numérico
             for col in columnas_numericas:
                 df[col] = pd.to_numeric(
                     df[col].replace({'(en blanco)': '0', ',': '.'}, regex=True),
                     errors='coerce'
                 ).fillna(0)
             
+            ## Calcular stock total
             df['stock_total'] = (
                 df['Disponible'].fillna(0) + 
                 df['Calidad'].fillna(0) + 
                 df['Stock Externo'].fillna(0)
             )
             
+            ## Aplicar filtros y calcular demanda
             df = self.aplicar_filtros(df, fecha_inicio)
             df = self.calcular_demanda(df)
             
@@ -235,18 +266,20 @@ class PlanificadorProduccion:
             logger.info("=== Iniciando generación de plan ===")
             logger.info(f"{'Usando Simplex' if usar_simplex else 'Usando método propio'}")
             logger.info(f"Columnas disponibles: {df.columns.tolist()}")
-            logger.info(f"Datos iniciales:\n{df[['COD_ART', 'stock_total', 'demanda_diaria', 'Cj/H']].head()}")
+            logger.info(f"Datos iniciales:\n{df[['COD_ART', 'stock_total', 'demanda_media', 'Cj/H']].head()}")
             
             if isinstance(fecha_inicio, str):
                 fecha_inicio = datetime.strptime(fecha_inicio, "%d-%m-%Y")
             
             plan = df.copy()
+            ## Seleccionar método de optimización
             produccion_optima = (
                 self.simplex(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
                 if usar_simplex else
                 self.optimizar_produccion(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
             )
             
+            ## Validar producción óptima
             if produccion_optima is None:
                 logger.warning("No se obtuvo producción óptima")
                 return None, None, None
@@ -257,17 +290,20 @@ class PlanificadorProduccion:
                 
             logger.info(f"Producción óptima calculada:\n{produccion_optima}")
             
+            ## Asignar cajas y horas de producción
             plan.loc[produccion_optima.index, 'cajas_a_producir'] = produccion_optima
             plan['horas_necesarias'] = (plan['cajas_a_producir'] / plan['Cj/H']).round(3)
             
             logger.info(f"Plan antes de filtrar:\n{plan[plan['cajas_a_producir'] > 0][['COD_ART', 'cajas_a_producir', 'horas_necesarias']]}")
             
+            ## Filtrar productos con producción
             plan = plan[plan['cajas_a_producir'] > 0].copy()
             
             if plan.empty:
                 logger.warning("Plan está vacío después de filtrar cajas a producir")
                 return None, None, None
                 
+            ## Calcular fechas de planificación
             fecha_fin = fecha_inicio + timedelta(days=dias_planificacion)
             return plan, fecha_inicio, fecha_fin
             
@@ -281,9 +317,7 @@ class PlanificadorProduccion:
                 logger.error("No hay plan para reportar")
                 return
                 
-            def format_decimal(x):
-                return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                
+            ## Generar reporte detallado de producción
             print(f"\nPLAN DE PRODUCCIÓN ({fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')})")
             print("-" * 80)
             print(f"Total productos: {len(plan)}")
@@ -291,19 +325,18 @@ class PlanificadorProduccion:
             print(f"Total horas: {plan['horas_necesarias'].sum():.1f}")
             print("\nDetalle por producto:")
             
-            columnas = ['COD_ART', 'NOM_ART', 'stock_total', 'demanda_diaria', 
-                        'cajas_a_producir', 'horas_necesarias']
-                        
-            plan_formatted = plan[columnas].copy()
-            plan_formatted['stock_total'] = plan_formatted['stock_total'].apply(format_decimal)
-            plan_formatted['demanda_diaria'] = plan_formatted['demanda_diaria'].apply(format_decimal)
-            plan_formatted['cajas_a_producir'] = plan_formatted['cajas_a_producir'].apply(format_decimal)
-            plan_formatted['horas_necesarias'] = plan_formatted['horas_necesarias'].apply(format_decimal)
+            columnas = ['COD_ART', 'NOM_ART', 'stock_total', 'demanda_media', 
+                      'cajas_a_producir', 'horas_necesarias']
+            print(plan[columnas].to_string(index=False))
             
-            print(plan_formatted.to_string(index=False))
+            ## Opcional: Guardar reporte en archivo CSV
+            ruta_reporte = f"plan_produccion_{fecha_inicio.strftime('%Y%m%d')}.csv"
+            plan[columnas].to_csv(ruta_reporte, index=False)
+            logger.info(f"Reporte guardado en {ruta_reporte}")
             
         except Exception as e:
-            logger.error(f"Error generando reporte: {str(e)}")      
+            logger.error(f"Error generando reporte: {str(e)}")
+
 def main():
     try:
         fecha_inicio = input("Ingrese fecha inicio (DD-MM-YYYY o DD/MM/YYYY): ").strip()

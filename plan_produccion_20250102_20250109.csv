@@ -1,8 +1,0 @@
-Fecha Inicio;02/01/2025;;;;;;;;
-Fecha Fin;09/01/2025;;;;;;;;
-Días no hábiles;2;;;;;;;;
-;;;;;;;;;;;
-COD_ART;NOM_ART;stock_total;demanda_diaria;cajas_a_producir;horas_necesarias;cobertura_final
-400121;Miniatura;197.0;15.237096774193548;291.0;1.4820370992082765;32.02709854980417
-401113;Bocata;0.0;;478.0;2.1295825118327714;
-401301;Baguette Plus;339.0;1.5133333333333332;6.0;0.03741935660908784;227.97356828193836
