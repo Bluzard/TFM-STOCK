@@ -22,15 +22,18 @@ class PlanificadorProduccion:
             dias_habiles = dias_planificacion - dias_no_habiles
             
             df_work = df.copy()
-            df_work = df_work[df_work['demanda_diaria'] > 0].copy()  # Filtrar demanda 0
+            # Filtros combinados
+            df_work = df_work[
+                (df_work['Vta -60'] > self.MIN_VENTA_60D) & 
+                (df_work['demanda_diaria'] > 0)
+            ].copy()
+            
             df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
             df_work['demanda_periodo'] = (df_work['demanda_diaria'] * dias_habiles).round(0)
             df_work['stock_seguridad'] = (df_work['demanda_diaria'] * self.DIAS_STOCK_SEGURIDAD).round(0)
             
-            # Solo productos que necesitan producción
             df_work = df_work[
-                (df_work['stock_total'] < df_work['stock_seguridad']) &
-                (df_work['demanda_diaria'] > 0)
+                (df_work['stock_total'] < df_work['stock_seguridad']) 
             ]
             
             if df_work.empty:
@@ -39,23 +42,18 @@ class PlanificadorProduccion:
                 
             n_productos = len(df_work)
             
-            # Función objetivo: minimizar déficit
             c = df_work['demanda_diaria'].values * -1
             
-            # Restricción de horas disponibles
             A_ub = np.zeros((1, n_productos))
             A_ub[0] = 1/df_work['Cj/H'].values
             b_ub = [horas_disponibles]
             
-            # Restricción de stock mínimo
             A_lb = np.identity(n_productos)
             b_lb = df_work['stock_seguridad'].values - df_work['stock_total'].values
             
-            # Combinar restricciones
             A = np.vstack([A_ub, A_lb])
             b = np.concatenate([b_ub, b_lb])
             
-            # Sin restricción de horas mínimas
             bounds = [(0, None) for i in range(n_productos)]
             
             result = linprog(
