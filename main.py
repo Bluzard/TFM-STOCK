@@ -3,32 +3,88 @@ import numpy as np
 from datetime import datetime, timedelta
 import logging
 import os
-from scipy.optimize import linprog
 
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class PlanificadorProduccion:
     def __init__(self):
         self.DIAS_STOCK_SEGURIDAD = 3
-        self.HORAS_MIN_LOTE = 2
         self.DIAS_MAX_COBERTURA = 15
         self.MIN_VENTA_60D = 0
         self.MIN_TASA_PRODUCCION = 0
         self.UMBRAL_VARIACION = 0.20
         self.COBERTURA_MAX_FINAL = 60
 
+    def optimizar_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
+        try:
+            dias_habiles = dias_planificacion - dias_no_habiles
+            logger.info(f"Días hábiles para planificación: {dias_habiles}")
+            
+            df_work = df.copy()
+            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
+            df_work['dias_cobertura'] = (df_work['stock_total'] / df_work['demanda_diaria']).round(2)
+            df_work['demanda_periodo'] = (df_work['demanda_diaria'] * dias_habiles).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_diaria'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            
+            df_work['necesidad_base'] = df_work.apply(lambda row: max(
+                row['stock_seguridad'] - row['stock_total'],
+                row['demanda_periodo'] - (row['stock_total'] - row['stock_seguridad'])
+            ), axis=1)
+            
+            # Mantener índice original
+            df_work = df_work[
+                (df_work['cobertura_actual'] <= self.COBERTURA_MAX_FINAL) &
+                (df_work['necesidad_base'] > 0)
+            ]
+            
+            if df_work.empty:
+                logger.error("No hay productos que requieran producción")
+                return None
+
+            df_work = df_work.sort_values('dias_cobertura', ascending=True)
+            
+            produccion_optima = pd.Series(0.0, index=df_work.index)
+            horas_totales = 0.0
+            horas_restantes = horas_disponibles
+            
+            for idx in df_work.index:
+                if horas_restantes < 2:
+                    break
+                    
+                producto = df_work.loc[idx]
+                necesidad = producto['necesidad_base']
+                
+                horas_necesarias = necesidad / producto['Cj/H']
+                
+                if 0 < horas_necesarias < 2:
+                    horas_necesarias = 2
+                    necesidad = horas_necesarias * producto['Cj/H']
+                
+                if horas_necesarias > horas_restantes:
+                    necesidad = horas_restantes * producto['Cj/H']
+                    horas_necesarias = horas_restantes
+                
+                produccion_optima[idx] = round(necesidad, 0)
+                horas_totales += horas_necesarias
+                horas_restantes -= horas_necesarias
+                
+                logger.info(f"Producto {producto['COD_ART']}: {necesidad:.0f} cajas, {horas_necesarias:.2f} horas")
+
+            logger.info(f"Horas totales necesarias: {horas_totales:.2f}")
+            logger.info(f"Horas restantes: {horas_restantes:.2f}")
+            return produccion_optima
+
+        except Exception as e:
+            logger.error(f"Error en optimización: {str(e)}")
+            logger.error("Traza completa:", exc_info=True)
+            return None
+
     def aplicar_filtros(self, df, fecha_inicio):
-        """Aplica los filtros según documento de requerimientos"""
         df_filtrado = df.copy()
-        
-        # 1. Productos activos (ventas en últimos 60 días)
         df_filtrado = df_filtrado[df_filtrado['Vta -60'] > self.MIN_VENTA_60D]
-        
-        # 2. Tasa de producción válida
         df_filtrado = df_filtrado[df_filtrado['Cj/H'] > self.MIN_TASA_PRODUCCION]
         
-        # 3. Verificar OF previas
         df_filtrado['1ª OF'] = df_filtrado['1ª OF'].replace('(en blanco)', pd.NA)
         mask_of = ~df_filtrado['1ª OF'].notna() | (
             pd.to_datetime(df_filtrado['1ª OF'], format='%d/%m/%Y') > pd.to_datetime(fecha_inicio)
@@ -38,13 +94,16 @@ class PlanificadorProduccion:
         return df_filtrado.drop_duplicates(subset=['COD_ART'], keep='last')
 
     def calcular_demanda(self, df):
-        """Calcula demanda según especificaciones"""
-        df['variacion_aa'] = abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA']).fillna(0)
+        df['M_Vta -15 AA'] = df['M_Vta -15 AA'].replace(0, 1)
+        df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA']).fillna(0)
+        
         df['demanda_diaria'] = np.where(
             df['variacion_aa'] > self.UMBRAL_VARIACION,
             df['M_Vta -15'] * (1 + df['variacion_aa']),
             df['M_Vta -15'] / 15
-        ).clip(lower=0)  # Asegurar demanda no negativa
+        )
+        
+        df['demanda_diaria'] = np.maximum(df['demanda_diaria'], 0)
         return df
 
     def cargar_datos(self, carpeta="Dataset", fecha_inicio=None):
@@ -69,6 +128,7 @@ class PlanificadorProduccion:
                 )
             
             ruta_archivo = os.path.join(carpeta, archivo)
+            logger.info(f"Cargando archivo: {ruta_archivo}")
             
             df = pd.read_csv(ruta_archivo, sep=';', encoding='latin1', skiprows=4)
             df = df[df['COD_ART'].notna()]
@@ -92,105 +152,19 @@ class PlanificadorProduccion:
             df = self.aplicar_filtros(df, fecha_inicio)
             df = self.calcular_demanda(df)
             
+            logger.info(f"Datos cargados: {len(df)} productos")
             return df
             
         except Exception as e:
             logger.error(f"Error cargando datos: {str(e)}")
             return None
 
-    def optimizar_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
-        try:
-            if len(df) == 0:
-                logger.error("No hay productos para optimizar")
-                return None
-            
-            # Diagnóstico de condiciones iniciales
-            logger.error(f"Iniciando optimización con {len(df)} productos")
-            logger.error(f"Horas disponibles: {horas_disponibles}")
-            
-            n_productos = len(df)
-            dias_habiles = dias_planificacion - dias_no_habiles
-            
-            # Vector de coeficientes objetivo (minimizar producción total)
-            c = np.ones(n_productos)
-            
-            # Matriz de restricciones
-            A_ub = []
-            b_ub = []
-            
-            # 1. Restricción de horas totales
-            horas_por_caja = np.array([1/producto['Cj/H'] if producto['Cj/H'] > 0 else 1e6 for _, producto in df.iterrows()])
-            A_ub.append(horas_por_caja)
-            b_ub.append(horas_disponibles)
-            logger.error(f"Horas por caja: {horas_por_caja}")
-            logger.error(f"Horas disponibles: {horas_disponibles}")
-            
-            # 2. Stock mínimo de seguridad
-            stock_actual = df['stock_total'].values
-            demanda_diaria = df['demanda_diaria'].replace([np.inf, -np.inf], 0).fillna(0).values
-            demanda_total = demanda_diaria * (self.DIAS_STOCK_SEGURIDAD + dias_habiles)
-            
-            logger.error("Análisis de demanda y stock:")
-            for i, (art, stock, demanda, dem_total) in enumerate(zip(df['COD_ART'], stock_actual, demanda_diaria, demanda_total)):
-                logger.error(f"Producto {art}: Stock={stock}, Demanda diaria={demanda}, Demanda total={dem_total}")
-                
-                # Restricción de stock
-                fila = np.zeros(n_productos)
-                fila[i] = -1
-                A_ub.append(fila)
-                b_ub.append(float(stock - dem_total))
-            
-            # 3. Cobertura máxima
-            for i in range(n_productos):
-                if demanda_diaria[i] > 0:
-                    fila = np.zeros(n_productos)
-                    fila[i] = 1
-                    A_ub.append(fila)
-                    cobertura_max = demanda_diaria[i] * self.COBERTURA_MAX_FINAL
-                    b_ub.append(float(cobertura_max - stock_actual[i]))
-            
-            A_ub = np.array(A_ub)
-            b_ub = np.array(b_ub)
-            
-            # Diagnóstico de restricciones
-            logger.error("Matriz de restricciones:")
-            logger.error(f"A_ub (restricciones): \n{A_ub}")
-            logger.error(f"b_ub (límites): {b_ub}")
-            
-            # Límites de producción
-            limites = []
-            for _, producto in df.iterrows():
-                cajas_min = max(0, self.HORAS_MIN_LOTE * producto['Cj/H'])
-                limites.append((float(cajas_min), None))
-            
-            logger.error(f"Límites de producción: {limites}")
-            
-            # Ejecución del simplex
-            resultado = linprog(
-                c, 
-                A_ub=A_ub, 
-                b_ub=b_ub, 
-                bounds=limites, 
-                method='highs'
-            )
-            
-            # Diagnóstico de resultados
-            if resultado.success:
-                logger.error(f"Optimización exitosa: {resultado.message}")
-                return resultado.x
-            else:
-                logger.error(f"Optimización fallida: {resultado.message}")
-                # Información adicional sobre el fracaso
-                logger.error(f"Estado del modelo: {resultado.status}")
-                logger.error(f"Estado primal: {resultado.status}")
-                return None
-            
-        except Exception as e:
-            logger.error(f"Error en optimización: {str(e)}")
-            return None
-
     def generar_plan_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles, fecha_inicio=None):
         try:
+            logger.info("=== Iniciando generación de plan ===")
+            logger.info(f"Columnas disponibles: {df.columns.tolist()}")
+            logger.info(f"Datos iniciales:\n{df[['COD_ART', 'stock_total', 'demanda_diaria', 'Cj/H']].head()}")
+            
             if isinstance(fecha_inicio, str):
                 fecha_inicio = datetime.strptime(fecha_inicio, "%d-%m-%Y")
             
@@ -200,55 +174,52 @@ class PlanificadorProduccion:
             )
             
             if produccion_optima is None:
+                logger.warning("No se obtuvo producción óptima")
                 return None, None, None
+                
+            if produccion_optima.empty:
+                logger.warning("Producción óptima está vacía")
+                return None, None, None
+                
+            logger.info(f"Producción óptima calculada:\n{produccion_optima}")
             
-            plan['cajas_a_producir'] = produccion_optima
-            plan['horas_necesarias'] = plan['cajas_a_producir'] / plan['Cj/H']
+            plan.loc[produccion_optima.index, 'cajas_a_producir'] = produccion_optima
+            plan['horas_necesarias'] = (plan['cajas_a_producir'] / plan['Cj/H']).round(3)
+            
+            logger.info(f"Plan antes de filtrar:\n{plan[plan['cajas_a_producir'] > 0][['COD_ART', 'cajas_a_producir', 'horas_necesarias']]}")
+            
             plan = plan[plan['cajas_a_producir'] > 0].copy()
             
-            plan['cobertura_final'] = (
-                (plan['stock_total'] + plan['cajas_a_producir']) / 
-                plan['demanda_diaria']
-            )
-            
-            if not plan.empty:
-                fecha_fin = fecha_inicio + timedelta(days=dias_planificacion)
-                nombre_archivo = f"plan_produccion_{fecha_inicio.strftime('%Y%m%d')}_{fecha_fin.strftime('%Y%m%d')}.csv"
+            if plan.empty:
+                logger.warning("Plan está vacío después de filtrar cajas a producir")
+                return None, None, None
                 
-                with open(nombre_archivo, 'w', encoding='latin1') as f:
-                    f.write(f"Fecha Inicio;{fecha_inicio.strftime('%d/%m/%Y')};;;;;;;;\n")
-                    f.write(f"Fecha Fin;{fecha_fin.strftime('%d/%m/%Y')};;;;;;;;\n")
-                    f.write(f"Días no hábiles;{dias_no_habiles};;;;;;;;\n")
-                    f.write(";;;;;;;;;;;\n")
-                
-                columnas = ['COD_ART', 'NOM_ART', 'stock_total', 'demanda_diaria', 
-                           'cajas_a_producir', 'horas_necesarias', 'cobertura_final']
-                plan[columnas].to_csv(nombre_archivo, sep=';', index=False, mode='a', 
-                                    encoding='latin1')
-                
-                return plan, fecha_inicio, fecha_fin
-            
-            return None, None, None
+            fecha_fin = fecha_inicio + timedelta(days=dias_planificacion)
+            return plan, fecha_inicio, fecha_fin
             
         except Exception as e:
-            logger.error(f"Error generando plan: {str(e)}")
+            logger.error(f"Error generando plan: {str(e)}", exc_info=True)
             return None, None, None
 
     def generar_reporte(self, plan, fecha_inicio, fecha_fin):
-        if plan is None or len(plan) == 0:
-            logger.error("No hay plan para reportar")
-            return
+        try:
+            if plan is None or len(plan) == 0:
+                logger.error("No hay plan para reportar")
+                return
+                
+            print(f"\nPLAN DE PRODUCCIÓN ({fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')})")
+            print("-" * 80)
+            print(f"Total productos: {len(plan)}")
+            print(f"Total cajas: {plan['cajas_a_producir'].sum():.0f}")
+            print(f"Total horas: {plan['horas_necesarias'].sum():.1f}")
+            print("\nDetalle por producto:")
             
-        print(f"\nPLAN DE PRODUCCIÓN ({fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')})")
-        print("-" * 80)
-        print(f"Total productos: {len(plan)}")
-        print(f"Total cajas: {plan['cajas_a_producir'].sum():.0f}")
-        print(f"Total horas: {plan['horas_necesarias'].sum():.1f}")
-        print("\nDetalle por producto:")
-        
-        columnas = ['COD_ART', 'NOM_ART', 'stock_total', 'demanda_diaria', 
-                    'cajas_a_producir', 'horas_necesarias', 'cobertura_final']
-        print(plan[columnas].to_string(index=False))
+            columnas = ['COD_ART', 'NOM_ART', 'stock_total', 'demanda_diaria', 
+                      'cajas_a_producir', 'horas_necesarias']
+            print(plan[columnas].to_string(index=False))
+            
+        except Exception as e:
+            logger.error(f"Error generando reporte: {str(e)}")
 
 def main():
     try:
@@ -257,27 +228,48 @@ def main():
         dias_no_habiles = int(input("Ingrese días no hábiles en el periodo: "))
         horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
         
+        if dias_planificacion <= 0:
+            raise ValueError("Los días de planificación deben ser positivos")
+        if dias_no_habiles < 0 or dias_no_habiles >= dias_planificacion:
+            raise ValueError("Días no hábiles inválidos")
+        if horas_mantenimiento < 0:
+            raise ValueError("Las horas de mantenimiento no pueden ser negativas")
+            
+        horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
+        logger.info(f"Horas disponibles para producción: {horas_disponibles}")
+        
         planificador = PlanificadorProduccion()
         
+        logger.info("Cargando datos...")
         df = planificador.cargar_datos(fecha_inicio=fecha_inicio)
         if df is None:
             logger.error("Error al cargar datos")
             return
+            
+        logger.info(f"Datos cargados: {len(df)} productos")
         
-        horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
-        
+        logger.info("Generando plan de producción...")
         plan, fecha_inicio_dt, fecha_fin = planificador.generar_plan_produccion(
-            df, horas_disponibles, dias_planificacion, dias_no_habiles, fecha_inicio
+            df, 
+            horas_disponibles,
+            dias_planificacion,
+            dias_no_habiles,
+            fecha_inicio
         )
         
         if plan is None:
             logger.error("No se pudo generar el plan")
             return
-        
+            
+        logger.info("Generando reporte...")
         planificador.generar_reporte(plan, fecha_inicio_dt, fecha_fin)
         
+        logger.info("Proceso completado exitosamente")
+        
+    except ValueError as ve:
+        logger.error(f"Error de validación: {str(ve)}")
     except Exception as e:
-        logger.error(f"Error en ejecución: {str(e)}")
+        logger.error(f"Error en ejecución: {str(e)}", exc_info=True)
 
 if __name__ == "__main__":
     main()
