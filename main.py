@@ -5,7 +5,7 @@ import logging
 import os
 from scipy.optimize import linprog
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class PlanificadorProduccion:
@@ -16,20 +16,17 @@ class PlanificadorProduccion:
         self.MIN_VENTA_60D = 0
         self.MIN_TASA_PRODUCCION = 0
         self.UMBRAL_VARIACION = 0.20
-        self.COBERTURA_MAX_FINAL = 60  # Máxima cobertura después de producción
+        self.COBERTURA_MAX_FINAL = 60
 
     def aplicar_filtros(self, df, fecha_inicio):
         """Aplica los filtros según documento de requerimientos"""
         df_filtrado = df.copy()
-        total_inicial = len(df_filtrado)
         
         # 1. Productos activos (ventas en últimos 60 días)
         df_filtrado = df_filtrado[df_filtrado['Vta -60'] > self.MIN_VENTA_60D]
-        logger.info(f"Productos activos: {len(df_filtrado)} de {total_inicial}")
         
         # 2. Tasa de producción válida
         df_filtrado = df_filtrado[df_filtrado['Cj/H'] > self.MIN_TASA_PRODUCCION]
-        logger.info(f"Con tasa producción válida: {len(df_filtrado)}")
         
         # 3. Verificar OF previas
         df_filtrado['1ª OF'] = df_filtrado['1ª OF'].replace('(en blanco)', pd.NA)
@@ -37,18 +34,17 @@ class PlanificadorProduccion:
             pd.to_datetime(df_filtrado['1ª OF'], format='%d/%m/%Y') > pd.to_datetime(fecha_inicio)
         )
         df_filtrado = df_filtrado[mask_of]
-        logger.info(f"Sin OF previa: {len(df_filtrado)}")
         
         return df_filtrado.drop_duplicates(subset=['COD_ART'], keep='last')
 
     def calcular_demanda(self, df):
-        """Calcula demanda considerando variación año anterior"""
+        """Calcula demanda según especificaciones"""
         df['variacion_aa'] = abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA']).fillna(0)
         df['demanda_diaria'] = np.where(
             df['variacion_aa'] > self.UMBRAL_VARIACION,
-            df['M_Vta -15'] * (1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA']),
+            df['M_Vta -15'] * (1 + df['variacion_aa']),
             df['M_Vta -15'] / 15
-        )
+        ).clip(lower=0)  # Asegurar demanda no negativa
         return df
 
     def cargar_datos(self, carpeta="Dataset", fecha_inicio=None):
@@ -73,15 +69,9 @@ class PlanificadorProduccion:
                 )
             
             ruta_archivo = os.path.join(carpeta, archivo)
-            logger.info(f"Cargando archivo: {archivo}")
-            
-            with open(ruta_archivo, 'r', encoding='latin1') as f:
-                fecha_archivo = f.readline().split(';')[1].strip().split()[0]
-                logger.info(f"Fecha del archivo: {fecha_archivo}")
             
             df = pd.read_csv(ruta_archivo, sep=';', encoding='latin1', skiprows=4)
             df = df[df['COD_ART'].notna()]
-            logger.info(f"Columnas disponibles: {df.columns.tolist()}")
             
             columnas_numericas = ['Cj/H', 'M_Vta -15', 'Disponible', 'Calidad', 
                                 'Stock Externo', 'M_Vta -15 AA', 'M_Vta +15 AA', 
@@ -113,11 +103,11 @@ class PlanificadorProduccion:
             if len(df) == 0:
                 logger.error("No hay productos para optimizar")
                 return None
-                
-            logger.info(f"Optimizando {len(df)} productos")
-            logger.info(f"Horas disponibles: {horas_disponibles}")
-            logger.info(f"Días planificación: {dias_planificacion}")
-            logger.info(f"Días no hábiles: {dias_no_habiles}")
+            
+            # Diagnóstico de condiciones iniciales
+            logger.error(f"Iniciando optimización con {len(df)} productos")
+            logger.error(f"Horas disponibles: {horas_disponibles}")
+            
             n_productos = len(df)
             dias_habiles = dias_planificacion - dias_no_habiles
             
@@ -132,17 +122,23 @@ class PlanificadorProduccion:
             horas_por_caja = np.array([1/producto['Cj/H'] if producto['Cj/H'] > 0 else 1e6 for _, producto in df.iterrows()])
             A_ub.append(horas_por_caja)
             b_ub.append(horas_disponibles)
+            logger.error(f"Horas por caja: {horas_por_caja}")
+            logger.error(f"Horas disponibles: {horas_disponibles}")
             
             # 2. Stock mínimo de seguridad
             stock_actual = df['stock_total'].values
             demanda_diaria = df['demanda_diaria'].replace([np.inf, -np.inf], 0).fillna(0).values
             demanda_total = demanda_diaria * (self.DIAS_STOCK_SEGURIDAD + dias_habiles)
             
-            for i in range(n_productos):
+            logger.error("Análisis de demanda y stock:")
+            for i, (art, stock, demanda, dem_total) in enumerate(zip(df['COD_ART'], stock_actual, demanda_diaria, demanda_total)):
+                logger.error(f"Producto {art}: Stock={stock}, Demanda diaria={demanda}, Demanda total={dem_total}")
+                
+                # Restricción de stock
                 fila = np.zeros(n_productos)
                 fila[i] = -1
                 A_ub.append(fila)
-                b_ub.append(float(stock_actual[i] - demanda_total[i]))
+                b_ub.append(float(stock - dem_total))
             
             # 3. Cobertura máxima
             for i in range(n_productos):
@@ -156,12 +152,20 @@ class PlanificadorProduccion:
             A_ub = np.array(A_ub)
             b_ub = np.array(b_ub)
             
+            # Diagnóstico de restricciones
+            logger.error("Matriz de restricciones:")
+            logger.error(f"A_ub (restricciones): \n{A_ub}")
+            logger.error(f"b_ub (límites): {b_ub}")
+            
             # Límites de producción
             limites = []
             for _, producto in df.iterrows():
                 cajas_min = max(0, self.HORAS_MIN_LOTE * producto['Cj/H'])
                 limites.append((float(cajas_min), None))
             
+            logger.error(f"Límites de producción: {limites}")
+            
+            # Ejecución del simplex
             resultado = linprog(
                 c, 
                 A_ub=A_ub, 
@@ -170,14 +174,16 @@ class PlanificadorProduccion:
                 method='highs'
             )
             
+            # Diagnóstico de resultados
             if resultado.success:
-                logger.info(f"Optimización exitosa: {resultado.message}")
+                logger.error(f"Optimización exitosa: {resultado.message}")
                 return resultado.x
             else:
                 logger.error(f"Optimización fallida: {resultado.message}")
+                # Información adicional sobre el fracaso
+                logger.error(f"Estado del modelo: {resultado.status}")
+                logger.error(f"Estado primal: {resultado.status}")
                 return None
-            
-            return resultado.x if resultado.success else None
             
         except Exception as e:
             logger.error(f"Error en optimización: {str(e)}")
@@ -219,7 +225,6 @@ class PlanificadorProduccion:
                            'cajas_a_producir', 'horas_necesarias', 'cobertura_final']
                 plan[columnas].to_csv(nombre_archivo, sep=';', index=False, mode='a', 
                                     encoding='latin1')
-                logger.info(f"Plan guardado en: {nombre_archivo}")
                 
                 return plan, fecha_inicio, fecha_fin
             
