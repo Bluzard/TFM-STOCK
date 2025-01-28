@@ -1,5 +1,52 @@
-Busca nuevas palabras que puedan aparecer aqui, esas podrian ser
-fecha
-manzana
-azul
-casa
+Puntos por implementar:
+
+aplicar_filtros:
+    -Dejar filas filtradas disponibles para imprimir en archivo de planificación (generar_reporte)
+
+cargar_datos:
+
+
+
+
+
+------------------------------------------------------------------------------------------------
+Estructura
+
+class PlanificadorProduccion:
+    def __init__(self):
+        ## Parámetros base para la planificación
+        self.DIAS_STOCK_SEGURIDAD = 3
+        self.MIN_VENTA_60D = 0  ## Umbral mínimo de ventas en 60 días
+        self.MIN_TASA_PRODUCCION = 0  ## Tasa mínima de producción
+        self.UMBRAL_VARIACION = 0.20  ## Umbral de variación para ajuste de demanda
+        self.COBERTURA_MAX_FINAL = 60  ## Máxima cobertura de stock permitida
+
+     def simplex(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
+
+     def optimizar_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
+
+     def aplicar_filtros(self, df):
+
+     def calcular_demanda(self, df):
+
+     def cargar_datos(self, carpeta="Dataset", fecha_dataset=None, fecha_inicio=None):
+            df = self.aplicar_filtros(df)
+            df = self.calcular_demanda(df)
+
+     def generar_plan_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles, fecha_inicio=None, usar_simplex=False):
+
+     def generar_reporte(self, plan, fecha_inicio, fecha_fin):
+
+def main():
+      planificador = PlanificadorProduccion()
+
+      df = planificador.cargar_datos(fecha_inicio=fecha_inicio, fecha_dataset=fecha_dataset)
+
+              plan, fecha_inicio_dt, fecha_fin = planificador.generar_plan_produccion(
+            df, 
+            horas_disponibles,
+            dias_planificacion,
+            dias_no_habiles,
+            fecha_inicio,
+            usar_simplex
+        )
