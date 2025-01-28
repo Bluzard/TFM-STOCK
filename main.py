@@ -11,33 +11,38 @@ logger = logging.getLogger(__name__)
 class PlanificadorProduccion:
     def __init__(self):
         ## Parámetros base para la planificación
-        self.DIAS_STOCK_SEGURIDAD = 3
-        self.MIN_VENTA_60D = 0  ## Umbral mínimo de ventas en 60 días
-        self.MIN_TASA_PRODUCCION = 0  ## Tasa mínima de producción
-        self.UMBRAL_VARIACION = 0.20  ## Umbral de variación para ajuste de demanda
-        self.COBERTURA_MAX_FINAL = 60  ## Máxima cobertura de stock permitida
+        self.COBERTURA_MIN = 3 #Cobertura stock de seguridad mínima (días)
+        self.COBERTURA_MAX = 60  ## Máxima cobertura de stock permitida e(días)
+        self.DEMANDA_60D_MIN = 0  ## Umbral mínimo de ventas en 60 días (Cj)
+        self.TASA_PRODUCCION_MIN = 0  ## Tasa mínima de producción (Cj/h)
+        self.UMBRAL_VARIACION = 0.20  ## Umbral de variación para ajuste de demanda (%)
+        
 
-    def simplex(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
+    def simplex(self, df, horas_disponibles, dias_planificacion):
         try:
             #dias_habiles = dias_planificacion - dias_no_habiles #demanda media considera todos los días del año
             df_work = df.copy()
             
             ## Filtrar productos con demanda válida
             df_work = df_work[
-                (df_work['Vta -60'] > self.MIN_VENTA_60D) &
+                (df_work['Vta -60'] > self.DEMANDA_60D_MIN) &
                 (df_work['demanda_media'] > 0)
             ].copy()
             
-            ## Calcular cobertura actual y stock de seguridad
-            df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
+            ## Calcular cobertura inicial y stock de seguridad
             df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+
+            df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
+            df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo'])/ df_work['demanda_media']).round(1)
+            
             
             ## Filtrar productos que necesitan producción
             df_work = df_work[
-                (df_work['cobertura_inicial'] <= self.COBERTURA_MAX_FINAL) &
-                (df_work['stock_inicial'] < df_work['stock_seguridad'])
+                (df_work['cobertura_final_est'] < self.COBERTURA_MAX) &
+                (df_work['cobertura_final_est'] >= self.COBERTURA_MIN)
             ]
+            logger.info(f"Lista entrada al Simplex:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial', 'cobertura_final_est']].head()}")
             
             if df_work.empty:
                 logger.info("No hay productos que requieran producción")
@@ -59,6 +64,11 @@ class PlanificadorProduccion:
             
             A = np.vstack([A_ub, A_lb])
             b = np.concatenate([b_ub, b_lb])
+
+            ## Chequeo previo a uso de simplex
+            print("A_ub:\n", A)
+            print("b_ub:\n", b)
+            print("c:\n", c)
             
             ## Resolver con Simplex
             result = linprog(
@@ -100,7 +110,7 @@ class PlanificadorProduccion:
             df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(2)
             df_work['dias_cobertura'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(2)
             df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_habiles).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
             
             ## Calcular necesidad base de producción
             df_work['necesidad_base'] = df_work.apply(lambda row: max(
@@ -110,7 +120,7 @@ class PlanificadorProduccion:
             
             ## Filtrar productos que necesitan producción
             df_work = df_work[
-                (df_work['cobertura_inicial'] <= self.COBERTURA_MAX_FINAL) &
+                (df_work['cobertura_inicial'] <= self.COBERTURA_MAX) &
                 (df_work['necesidad_base'] > 0)
             ]
             
@@ -165,8 +175,8 @@ class PlanificadorProduccion:
     def aplicar_filtros(self, df):
         ## Filtros para selección de productos
         df_filtrado = df.copy()
-        df_filtrado = df_filtrado[df_filtrado['Vta -60'] > self.MIN_VENTA_60D]
-        df_filtrado = df_filtrado[df_filtrado['Cj/H'] > self.MIN_TASA_PRODUCCION] #no parece filtrar nada
+        df_filtrado = df_filtrado[df_filtrado['Vta -60'] > self.DEMANDA_60D_MIN]
+        df_filtrado = df_filtrado[df_filtrado['Cj/H'] > self.TASA_PRODUCCION_MIN] #no parece filtrar nada
 
         """"  NO se debe filtrar por contenido en esta columna
         ## Filtro de primera orden de fabricación
@@ -299,7 +309,7 @@ class PlanificadorProduccion:
             plan = df.copy()
             ## Seleccionar método de optimización
             produccion_optima = (
-                self.simplex(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
+                self.simplex(plan, horas_disponibles, dias_planificacion)
                 if usar_simplex else
                 self.optimizar_produccion(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
             )
@@ -367,7 +377,7 @@ def main():
         fecha_dataset = input("Ingrese fecha de dataset (DD-MM-YYYY o DD/MM/YYYY): ").strip()
         fecha_inicio = input("Ingrese fecha inicio planificación (DD-MM-YYYY o DD/MM/YYYY): ").strip()
         dias_planificacion = int(input("Ingrese días de planificación: "))
-        dias_no_habiles = int(input("Ingrese días no hábiles en el periodo: "))
+        dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
         horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
         usar_simplex = input("¿Usar método Simplex? (s/n): ").strip().lower() == 's'
         
