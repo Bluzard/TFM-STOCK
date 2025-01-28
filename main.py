@@ -39,10 +39,10 @@ class PlanificadorProduccion:
             
             ## Filtrar productos que necesitan producción
             df_work = df_work[
-                (df_work['cobertura_final_est'] < self.COBERTURA_MAX) &
-                (df_work['cobertura_final_est'] >= self.COBERTURA_MIN)
+                (df_work['cobertura_final_est'] < self.COBERTURA_MAX) 
+            #    (df_work['cobertura_final_est'] >= self.COBERTURA_MIN)
             ]
-            logger.info(f"Lista entrada al Simplex:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial', 'cobertura_final_est']].head()}")
+            logger.info(f"Lista entrada al Simplex con {len(df_work)} filas:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial', 'cobertura_final_est']]}")
             
             if df_work.empty:
                 logger.info("No hay productos que requieran producción")
@@ -50,8 +50,12 @@ class PlanificadorProduccion:
                 
             n_productos = len(df_work)
             
+            #
+
             ## Función objetivo: minimizar diferencia entre stock actual y stock de seguridad
-            c = -df_work['demanda_media'].values  ## Priorizar productos con mayor demanda
+
+            #c = abs(df_work['stock_seguridad'].values - df_work['Cj/H'].values*df_work['horas_produccion'])    ## Priorizar productos con mayor demanda
+            c = -(df_work['demanda_media'].values) # Priorizar productos con mayor demanda
             
             ## Restricción de horas disponibles
             A_ub = np.zeros((1, n_productos))
@@ -65,6 +69,10 @@ class PlanificadorProduccion:
             A = np.vstack([A_ub, A_lb])
             b = np.concatenate([b_ub, b_lb])
 
+            #Restricción horas disponibles con igualdad
+            A_eq = np.ones((1, n_productos))  # Una fila con coeficientes 1 para todos los productos
+            b_eq = horas_disponibles
+
             ## Chequeo previo a uso de simplex
             print("A_ub:\n", A)
             print("b_ub:\n", b)
@@ -75,6 +83,8 @@ class PlanificadorProduccion:
                 c,
                 A_ub=A, 
                 b_ub=b,
+                A_eq=A_eq,
+                b_eq=b_eq,
                 method='highs'
             )
             
@@ -301,7 +311,7 @@ class PlanificadorProduccion:
             logger.info("=== Iniciando generación de plan ===")
             logger.info(f"{'Usando Simplex' if usar_simplex else 'Usando método propio'}")
             logger.info(f"Columnas disponibles: {df.columns.tolist()}")
-            logger.info(f"Datos iniciales:\n{df[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','1ª OF', 'OF']].head()}")
+            logger.info(f"Datos iniciales:\n{df[['COD_ART', 'Disponible','stock_inicial', 'demanda_media', 'Cj/H','1ª OF', 'OF']]}")
             
             if isinstance(fecha_inicio, str):
                 fecha_inicio = datetime.strptime(fecha_inicio, "%d-%m-%Y")

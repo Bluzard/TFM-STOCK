@@ -7,7 +7,88 @@ cargar_datos:
 
 
 
+Simplex:
 
+    def simplex(self, df, horas_disponibles, dias_planificacion):
+        try:
+            #dias_habiles = dias_planificacion - dias_no_habiles #demanda media considera todos los días del año
+            df_work = df.copy()
+            
+            ## Filtrar productos con demanda válida
+            df_work = df_work[
+                (df_work['Vta -60'] > self.DEMANDA_60D_MIN) &
+                (df_work['demanda_media'] > 0)
+            ].copy()
+            
+            ## Calcular cobertura inicial y stock de seguridad
+            df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+
+            df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
+            df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo'])/ df_work['demanda_media']).round(1)
+            
+            
+            ## Filtrar productos que necesitan producción
+            df_work = df_work[
+                (df_work['cobertura_final_est'] < self.COBERTURA_MAX) 
+            #    (df_work['cobertura_final_est'] >= self.COBERTURA_MIN)
+            ]
+            logger.info(f"Lista entrada al Simplex con {len(df_work)} filas:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial', 'cobertura_final_est']]}")
+            
+            if df_work.empty:
+                logger.info("No hay productos que requieran producción")
+                return None
+                
+            n_productos = len(df_work)
+            
+            #
+
+            ## Función objetivo: minimizar diferencia entre stock actual y stock de seguridad
+            c = -(df_work['demanda_media'].values)   ## Priorizar productos con mayor demanda
+            
+            ## Restricción de horas disponibles
+            A_ub = np.zeros((1, n_productos))
+            A_ub[0] = 1/df_work['Cj/H'].values
+            b_ub = [horas_disponibles]
+            
+            ## Restricción de stock mínimo
+            A_lb = np.identity(n_productos)
+            b_lb = df_work['stock_seguridad'].values - df_work['stock_inicial'].values
+            
+            A = np.vstack([A_ub, A_lb])
+            b = np.concatenate([b_ub, b_lb])
+
+            ## Chequeo previo a uso de simplex
+            print("A_ub:\n", A)
+            print("b_ub:\n", b)
+            print("c:\n", c)
+            
+            ## Resolver con Simplex
+            result = linprog(
+                c,
+                A_ub=A, 
+                b_ub=b,
+                method='highs'
+            )
+            
+            if not result.success:
+                logger.error(f"No se encontró solución óptima: {result.message}")
+                return None
+                
+            ## Obtener producción óptima
+            produccion_optima = pd.Series(np.round(result.x, 0), index=df_work.index)
+            
+            ## Calcular horas utilizadas
+            horas_por_producto = produccion_optima / df_work['Cj/H']
+            logger.info(f"Horas totales necesarias: {horas_por_producto.sum():.2f}")
+            logger.info(f"Horas restantes: {horas_disponibles - horas_por_producto.sum():.2f}")
+            
+            return produccion_optima
+            
+        except Exception as e:
+            logger.error(f"Error en optimización Simplex: {str(e)}")
+            logger.error("Traza completa:", exc_info=True)
+            return None
 
 ------------------------------------------------------------------------------------------------
 Estructura
