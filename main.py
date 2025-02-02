@@ -200,27 +200,41 @@ class PlanificadorProduccion:
         
         return df_filtrado.drop_duplicates(subset=['COD_ART'], keep='last')
 
-    def calcular_demanda(self, df):
-        ## Preparar datos para cálculo de demanda
-        df['M_Vta -15'] = pd.Series(df['M_Vta -15']).fillna(0)
-        df['M_Vta -15 AA'] = pd.Series(df['M_Vta -15 AA']).replace(0, 1).fillna(1)
-        df['M_Vta +15 AA'] = pd.Series(df['M_Vta +15 AA']).fillna(0)
+    def calcular_demanda(self,df):
+        """
+        Calcula la demanda media basándose en la lógica definida en la función original.
         
-        ## Calcular variación interanual
-        df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
-        df['variacion_aa'] = pd.Series(df['variacion_aa']).fillna(0)
+        Parámetros:
+        df (pd.DataFrame): DataFrame con los datos necesarios para el cálculo.
+        umbral_variacion (float): Umbral de variación para aplicar ajuste de demanda.
         
-        ## Cálculo de demanda media según las especificaciones
-        demanda = np.where(
-            df['variacion_aa'] > self.UMBRAL_VARIACION,
-            df['M_Vta -15'] * (df['M_Vta +15 AA'] / df['M_Vta -15 AA']), # el valor debe ser sin valor absoluto, para ver si requiere subir o bajar respecto a los últimos 15 días
-            df['M_Vta -15'] #se quita el /15 nuevamente, los valores"M_..." ya están expresados en días
+        Retorna:
+        pd.DataFrame: DataFrame con la columna 'demanda_media' actualizada.
+        """
+        # Asegurar que no haya valores nulos
+        df['M_Vta -15'] = df['M_Vta -15'].fillna(0)
+        df['M_Vta -15 AA'] = df['M_Vta -15 AA'].fillna(0)  # Se corrige aquí
+        df['M_Vta +15 AA'] = df['M_Vta +15 AA'].fillna(0)
+
+        # Calcular variación interanual (sin valor absoluto para permitir aumento/disminución)
+        with np.errstate(divide='ignore', invalid='ignore'):  # Evita warnings por división por 0
+            df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
+        df['variacion_aa'] = df['variacion_aa'].fillna(0)
+
+        # Calcular demanda media
+        df['demanda_media'] = np.where(
+            (df['M_Vta -15 AA'] == 0) | (df['M_Vta +15 AA'] == 0),  # Condición de Excel
+            df['M_Vta -15'],
+            np.where(
+                (df['variacion_aa'] > self.UMBRAL_VARIACION & df['variacion_aa'] <1),
+                df['M_Vta -15'] * (df['M_Vta +15 AA'] / df['M_Vta -15 AA']),
+                df['M_Vta -15']
+            )
         )
-        
-        ## Asignar demanda diaria
-        df['demanda_media'] = pd.Series(demanda).fillna(0)
+
+        # Asegurar que la demanda media no sea negativa
         df['demanda_media'] = np.maximum(df['demanda_media'], 0)
-        
+
         return df
 
     def cargar_datos(self, carpeta="Dataset", fecha_dataset=None, fecha_inicio=None):
