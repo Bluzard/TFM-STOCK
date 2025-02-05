@@ -19,25 +19,23 @@ class PlanificadorProduccion:
 
     def simplex(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
         try:
-            dias_habiles = dias_planificacion - dias_no_habiles
             df_work = df.copy()
             
-            ## Filtrar productos con demanda válida
+            # Filtrar productos con demanda válida
             df_work = df_work[
                 (df_work['Vta -60'] > self.MIN_VENTA_60D) &
                 (df_work['demanda_media'] > 0)
             ].copy()
             
-            ## Calcular cobertura actual y stock de seguridad
-            df_work['cobertura_actual'] = (df_work['stock_total'] / df_work['demanda_media']).round(2)
-            df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_habiles).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.DIAS_STOCK_SEGURIDAD).round(0)
+            # Calcular cobertura inicial y stock de seguridad
+            df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
+            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+            df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
             
-            ## Filtrar productos que necesitan producción
-            df_work = df_work[
-                (df_work['cobertura_actual'] <= self.COBERTURA_MAX_FINAL) &
-                (df_work['stock_total'] < df_work['stock_seguridad'])
-            ]
+            # Filtrar productos que necesitan producción
+            df_work = df_work[df_work['cobertura_inicial'] < self.COBERTURA_MAX]
+            
+            logger.info(f"Lista entrada al Simplex con {len(df_work)} filas:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial']]}")
             
             if df_work.empty:
                 logger.info("No hay productos que requieran producción")
@@ -45,22 +43,31 @@ class PlanificadorProduccion:
                 
             n_productos = len(df_work)
             
-            ## Función objetivo: minimizar diferencia entre stock actual y stock de seguridad
-            c = -df_work['demanda_media'].values  ## Priorizar productos con mayor demanda
+            # Función objetivo: minimizar horas totales de producción
+            c = 1/df_work['Cj/H'].values  # Coeficiente es horas por unidad producida
             
-            ## Restricción de horas disponibles
-            A_ub = np.zeros((1, n_productos))
-            A_ub[0] = 1/df_work['Cj/H'].values
-            b_ub = [horas_disponibles]
+            # 1. Restricción de cobertura mínima de 3 días (desigualdad)
+            A_cob = np.zeros((n_productos, n_productos))
+            for i in range(n_productos):
+                A_cob[i, i] = 1/df_work['demanda_media'].iloc[i]  # Conversión a días de cobertura
+            b_cob = 3 - df_work['stock_inicial'].values/df_work['demanda_media'].values
             
-            ## Restricción de stock mínimo
-            A_lb = np.identity(n_productos)
-            b_lb = df_work['stock_seguridad'].values - df_work['stock_total'].values
+            # 2. Restricción de horas disponibles
+            A_horas = np.zeros((1, n_productos))
+            A_horas[0] = 1/df_work['Cj/H'].values
+            b_horas = [horas_disponibles]
             
-            A = np.vstack([A_ub, A_lb])
-            b = np.concatenate([b_ub, b_lb])
+            # 3. Restricción de horas mínimas por producto (2 horas)
+            A_min_horas = np.zeros((n_productos, n_productos))
+            for i in range(n_productos):
+                A_min_horas[i, i] = -1/df_work['Cj/H'].iloc[i]  # Convertir cajas a horas
+            b_min_horas = np.full(n_productos, -2)  # Mínimo 2 horas
             
-            ## Resolver con Simplex
+            # Combinar todas las restricciones
+            A = np.vstack([-A_cob, A_horas, A_min_horas])  # -A_cob porque queremos >= en lugar de <=
+            b = np.concatenate([-b_cob, b_horas, b_min_horas])
+            
+            # Resolver con Simplex
             result = linprog(
                 c,
                 A_ub=A, 
@@ -72,13 +79,19 @@ class PlanificadorProduccion:
                 logger.error(f"No se encontró solución óptima: {result.message}")
                 return None
                 
-            ## Obtener producción óptima
+            # Extraer las cantidades a producir
             produccion_optima = pd.Series(np.round(result.x, 0), index=df_work.index)
             
-            ## Calcular horas utilizadas
+            # Calcular y loguear métricas
             horas_por_producto = produccion_optima / df_work['Cj/H']
+            cobertura_final = (df_work['stock_inicial'] + produccion_optima) / df_work['demanda_media']
+            
+            logger.info("Métricas de la solución:")
             logger.info(f"Horas totales necesarias: {horas_por_producto.sum():.2f}")
             logger.info(f"Horas restantes: {horas_disponibles - horas_por_producto.sum():.2f}")
+            logger.info("\nCobertura por producto:")
+            for idx in df_work.index:
+                logger.info(f"Producto {df_work.loc[idx, 'COD_ART']}: {cobertura_final[idx]:.1f} días")
             
             return produccion_optima
             
@@ -178,24 +191,34 @@ class PlanificadorProduccion:
         return df_filtrado.drop_duplicates(subset=['COD_ART'], keep='last')
 
     def calcular_demanda(self, df):
-        ## Preparar datos para cálculo de demanda
-        df['M_Vta -15'] = pd.Series(df['M_Vta -15']).fillna(0)
-        df['M_Vta -15 AA'] = pd.Series(df['M_Vta -15 AA']).replace(0, 1).fillna(1)
-        df['M_Vta +15 AA'] = pd.Series(df['M_Vta +15 AA']).fillna(0)
-        
-        ## Calcular variación interanual
-        df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
-        df['variacion_aa'] = pd.Series(df['variacion_aa']).fillna(0)
-        
-        ## Cálculo de demanda media según las especificaciones
-        demanda = np.where(
-            df['variacion_aa'] > self.UMBRAL_VARIACION,
-            df['M_Vta -15'] * (1 + df['variacion_aa']),
-            df['M_Vta -15'] / 15
+        """
+        Calcula la demanda media basándose en la lógica definida.
+        """
+        # Asegurar que no haya valores nulos
+        df['M_Vta -15'] = df['M_Vta -15'].fillna(0)
+        df['M_Vta -15 AA'] = df['M_Vta -15 AA'].fillna(0)
+        df['M_Vta +15 AA'] = df['M_Vta +15 AA'].fillna(0)
+
+        # Calcular variación interanual
+        with np.errstate(divide='ignore', invalid='ignore'):
+            df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
+        df['variacion_aa'] = df['variacion_aa'].fillna(0)
+
+        # Calcular demanda media
+        condicion_sin_datos_aa = (df['M_Vta -15 AA'] == 0) | (df['M_Vta +15 AA'] == 0)
+        condicion_variacion = (df['variacion_aa'] > self.UMBRAL_VARIACION) & (df['variacion_aa'] < 1)
+
+        df['demanda_media'] = np.where(
+            condicion_sin_datos_aa,
+            df['M_Vta -15'],
+            np.where(
+                condicion_variacion,
+                df['M_Vta -15'] * (df['M_Vta +15 AA'] / df['M_Vta -15 AA']),
+                df['M_Vta -15']
+            )
         )
-        
-        ## Asignar demanda diaria
-        df['demanda_media'] = pd.Series(demanda).fillna(0)
+
+        # Asegurar que la demanda media no sea negativa
         df['demanda_media'] = np.maximum(df['demanda_media'], 0)
         
         return df
