@@ -293,8 +293,8 @@ class PlanificadorProduccion:
 
 def main():
     try:
-        fecha_dataset = input("Ingrese fecha de dataset (DD-MM-YYYY o DD/MM/YYYY): ").strip()
-        fecha_inicio = input("Ingrese fecha inicio planificación (DD-MM-YYYY o DD/MM/YYYY): ").strip()
+        fecha_dataset = input("Ingrese fecha de dataset (DD-MM-YYYY): ").strip()
+        fecha_inicio = input("Ingrese fecha inicio planificación (DD-MM-YYYY): ").strip()
         dias_planificacion = int(input("Ingrese días de planificación: "))
         dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
         horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
