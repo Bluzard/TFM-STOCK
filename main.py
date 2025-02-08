@@ -101,13 +101,77 @@ def leer_dataset(nombre_archivo):
     except Exception as e:
         print(f"Error leyendo dataset: {str(e)}")
         return None
+    
+def leer_indicaciones_articulos():
+    try:
+        productos_omitir = set()
+        
+        print("\n--- PRODUCTOS A OMITIR POR INDICACIONES ---")  # Agregar este print
+        
+        with open('Indicaciones articulos.csv', 'r', encoding='latin1') as file:
+            header = file.readline().strip().split(';')
+            
+            try:
+                idx_info = header.index('Info extra')
+                idx_cod = header.index('COD_ART')
+            except ValueError:
+                logger.error("No se encontraron las columnas requeridas en el archivo de indicaciones")
+                return set()
+            
+            for linea in file:
+                if not linea.strip():
+                    continue
+                    
+                campos = linea.strip().split(';')
+                if len(campos) > max(idx_info, idx_cod):
+                    info_extra = campos[idx_info].strip()
+                    cod_art = campos[idx_cod].strip()
+                    
+                    if info_extra in ['DESCATALOGADO', 'PEDIDO']:
+                        productos_omitir.add(cod_art)
+                        print(f"Producto {cod_art} marcado como {info_extra}")  # Agregar este print
+        
+        print(f"Total productos a omitir: {len(productos_omitir)}\n")  # Agregar este print
+        return productos_omitir
+        
+    except FileNotFoundError:
+        logger.error("No se encontró el archivo 'Indicaciones articulos.csv'")
+        return set()
+    except Exception as e:
+        logger.error(f"Error leyendo indicaciones de artículos: {str(e)}")
+        return set()
+
+def filtrar_productos_validos(productos, productos_omitir):
+    """
+    Filtra los productos según las indicaciones y otros criterios
+    """
+    productos_validos = []
+    
+    for producto in productos:
+        # Verificar si el producto debe omitirse según indicaciones
+        if producto.cod_art in productos_omitir:
+            logger.debug(f"Producto {producto.cod_art} omitido por estar en lista de exclusión")
+            continue
+            
+        # Aplicar resto de filtros
+        if (producto.vta_60 > 0 and 
+            producto.cajas_hora > 0 and 
+            producto.demanda_media > 0 and 
+            producto.cobertura_inicial != 'NO VALIDO' and 
+            producto.cobertura_final_est != 'NO VALIDO'):
+            
+            productos_validos.append(producto)
+    
+    return productos_validos
 
 def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, horas_mantenimiento=9):
-    """Calcula todas las fórmulas para cada producto"""
+    """Calcula todas las fórmulas para cada producto y aplica filtros"""
     try:
         # 1. Cálculo de Horas Disponibles
         horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
         
+        # Cargar lista de productos a omitir desde indicaciones
+        productos_omitir = leer_indicaciones_articulos()
         productos_validos = []
         
         for producto in productos:
@@ -126,7 +190,6 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
 
             # 4. Actualizar Disponible *USAR FECHA_DATASET y FECHA_INICIO
             if producto.primera_of != '(en blanco)':
-                
                 # Convertir las fechas usando los formatos correctos
                 of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')  # Formato dd/mm/yyyy
                 date_inicio = datetime.strptime('13-01-25', '%d-%m-%y')      # Formato dd-mm-yy
@@ -164,17 +227,20 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             else:
                 producto.cobertura_final_est = 'NO VALIDO'
 
-            ## FILTRO POR ARTICULOS EN DOCUMENTO (INDICACIONES ARTICULOS.CSV) DESCATALOGADO Y PEDIDO            
-
-
-            # Filtros
-            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
+            # Aplicar todos los filtros
+            if (producto.cod_art not in productos_omitir and  # Filtro por indicaciones
+                producto.vta_60 > 0 and 
+                producto.cajas_hora > 0 and 
+                producto.demanda_media > 0 and 
+                producto.cobertura_inicial != 'NO VALIDO' and 
+                producto.cobertura_final_est != 'NO VALIDO'):
                 productos_validos.append(producto)
                     
+        logger.info(f"Productos válidos tras filtros: {len(productos_validos)} de {len(productos)}")
         return productos_validos, horas_disponibles
         
     except Exception as e:
-        print(f"Error en cálculos: {str(e)}")
+        logger.error(f"Error en cálculos: {str(e)}")
         return None, None
 
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
@@ -266,7 +332,51 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
                 else:
                     producto.cobertura_final_plan = float('inf')
 
-          
+            print(f"\nResumen de producción:")
+            print(f"Horas totales utilizadas: {horas_producidas:.2f}")
+            print(f"Horas disponibles: {horas_disponibles:.2f}")
+            # Calcular estadísticas de desviación
+            desviaciones = []
+            desviaciones_con_prod = []  # Solo productos que requieren producción
+            
+            print("\n=== ESTADÍSTICAS DE DESVIACIÓN ===")
+            print(f"Cobertura objetivo: {cobertura_minima:.1f} días")
+            print("\nRangos de desviación:")
+            critico = 0  # 0-5 días
+            aceptable = 0  # 5-20 días
+            alto = 0  # >20 días
+            
+            for producto in productos_validos:
+                if producto.demanda_media > 0:
+                    desviacion = producto.cobertura_final_plan - cobertura_minima
+                    desviaciones.append(desviacion)
+                    if producto.horas_necesarias > 0:
+                        desviaciones_con_prod.append(desviacion)
+                    
+                    if desviacion <= 5:
+                        critico += 1
+                    elif desviacion <= 20:
+                        aceptable += 1
+                    else:
+                        alto += 1
+            
+            print(f"Crítico (0-5 días): {critico} productos")
+            print(f"Aceptable (5-20 días): {aceptable} productos")
+            print(f"Alto (>20 días): {alto} productos")
+            
+            print("\nEstadísticas globales:")
+            print(f"Desviación media total: {np.mean(desviaciones):.1f} días")
+            print(f"Desviación estándar total: {np.std(desviaciones):.1f} días")
+            print(f"Desviación mínima: {min(desviaciones):.1f} días")
+            print(f"Desviación máxima: {max(desviaciones):.1f} días")
+            
+            if desviaciones_con_prod:
+                print("\nEstadísticas de productos con producción:")
+                print(f"Desviación media: {np.mean(desviaciones_con_prod):.1f} días")
+                print(f"Desviación estándar: {np.std(desviaciones_con_prod):.1f} días")
+                print(f"Desviación mínima: {min(desviaciones_con_prod):.1f} días")
+                print(f"Desviación máxima: {max(desviaciones_con_prod):.1f} días")
+
             return productos_validos
         else:
             print(f"Error en optimización: {result.message}")
