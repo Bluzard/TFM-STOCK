@@ -7,7 +7,7 @@ from scipy.optimize import linprog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
+#testtttt
 class PlanificadorProduccion:
     def __init__(self):
        ## Parámetros base para la planificación
