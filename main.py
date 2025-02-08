@@ -128,7 +128,8 @@ def leer_indicaciones_articulos():
         logger.error(f"Error leyendo indicaciones de artículos: {str(e)}")
         return set()
 
-def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, horas_mantenimiento=9):
+def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion, dias_no_habiles, horas_mantenimiento):
+    """Calcula todas las fórmulas para cada producto y aplica filtros"""
     try:
         # 1. Cálculo de Horas Disponibles
         horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
@@ -148,20 +149,18 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
                 producto.demanda_media = producto.m_vta_15
 
             # 3. Demanda provisoria
-            producto.demanda_provisoria = producto.demanda_media * (4)
+            dias_diff = (fecha_inicio - fecha_dataset).days
+            producto.demanda_provisoria = producto.demanda_media * dias_diff
 
             # 4. Actualizar Disponible
             if producto.primera_of != '(en blanco)':
                 of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
-                date_inicio = datetime.strptime('20-01-25', '%d-%m-%y')
-                date_dataset = datetime.strptime('16-01-25', '%d-%m-%y')
-
-                if of_date >= date_dataset and of_date < date_inicio:
+                if of_date >= fecha_dataset and of_date < fecha_inicio:
                     producto.disponible = producto.disponible + producto.of
             
             # 5. Stock Inicial
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
-
+            
             ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
             ## ----------------- CORREGIR PLANIFICACION (ADELANTAR PLANIFICACION)----------------- ##
             
@@ -178,7 +177,7 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             # 7. Demanda Periodo
             producto.demanda_periodo = producto.demanda_media * dias_planificacion
             
-            # 8. Stock de Seguridad
+            # 8. Stock de Seguridad (3 días)
             producto.stock_seguridad = producto.demanda_media * 3       
 
             # 9. Cobertura Final Estimada
@@ -203,10 +202,11 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
         logger.error(f"Error en cálculos: {str(e)}")
         return None, None
 
-def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
+def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
+    """Aplica el método Simplex para optimizar la producción"""
     try:
         n_productos = len(productos_validos)
-        cobertura_minima = 5 + dias_planificacion
+        cobertura_minima = dias_cobertura_base + dias_planificacion
 
         # Función objetivo
         coeficientes = []
@@ -284,11 +284,12 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         logger.error(f"Error en Simplex: {str(e)}")
         return None
 
-def exportar_resultados(productos_optimizados, fecha_planificacion):
+def exportar_resultados(productos_optimizados, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     try:
         datos = []
         for producto in productos_optimizados:
             if producto.horas_necesarias > 0:
+                cobertura_minima = dias_cobertura_base + dias_planificacion
                 datos.append({
                     'COD_ART': producto.cod_art,
                     'NOM_ART': producto.nom_art,
@@ -299,7 +300,7 @@ def exportar_resultados(productos_optimizados, fecha_planificacion):
                     'Cobertura_Inicial': round(producto.cobertura_inicial, 2),
                     'Cobertura_Final': round(producto.cobertura_final_plan, 2),
                     'Cobertura_Final_Est': round(producto.cobertura_final_est, 2),
-                    'Desviacion': round(producto.cobertura_final_plan - (5 + 6), 2)
+                    'Desviacion': round(producto.cobertura_final_plan - cobertura_minima, 2)
                 })
         
         df = pd.DataFrame(datos)
@@ -323,6 +324,7 @@ def main():
         dias_planificacion = 6
         dias_no_habiles = 1.6667
         horas_mantenimiento = 9
+        dias_cobertura_base = 5
         
         # 1. Leer dataset y calcular fórmulas
         productos = leer_dataset(nombre_dataset)
@@ -330,7 +332,9 @@ def main():
             raise ValueError("Error al leer el dataset")
         
         productos_validos, horas_disponibles = calcular_formulas(
-            productos, 
+            productos=productos,
+            fecha_inicio=fecha_planificacion,
+            fecha_dataset=fecha_dataset,
             dias_planificacion=dias_planificacion,
             dias_no_habiles=dias_no_habiles,
             horas_mantenimiento=horas_mantenimiento
@@ -341,16 +345,22 @@ def main():
         
         # 2. Aplicar Simplex
         productos_optimizados = aplicar_simplex(
-            productos_validos, 
-            horas_disponibles, 
-            dias_planificacion
+            productos_validos=productos_validos,
+            horas_disponibles=horas_disponibles,
+            dias_planificacion=dias_planificacion,
+            dias_cobertura_base=dias_cobertura_base
         )
         
         if not productos_optimizados:
             raise ValueError("Error en la optimización")
         
         # 3. Exportar resultados
-        exportar_resultados(productos_optimizados, fecha_planificacion)
+        exportar_resultados(
+            productos_optimizados=productos_optimizados,
+            fecha_planificacion=fecha_planificacion,
+            dias_planificacion=dias_planificacion,
+            dias_cobertura_base=dias_cobertura_base
+        )
         
         logger.info("Planificación completada exitosamente")
         
