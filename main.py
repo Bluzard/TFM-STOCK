@@ -8,12 +8,13 @@ logger = logging.getLogger(__name__)
 
 class Producto:
     def __init__(self, cod_art, nom_art, cod_gru, cajas_hora, disponible, calidad, 
-                 stock_externo, pedido, primera_of, vta_60, vta_15, m_vta_15, 
+                 stock_externo, pedido, primera_of, of, vta_60, vta_15, m_vta_15, 
                  vta_15_aa, m_vta_15_aa, vta_15_mas_aa, m_vta_15_mas_aa):
         # Datos básicos
         self.cod_art = cod_art
         self.nom_art = nom_art
         self.cod_gru = cod_gru
+        self.of = self._convertir_float(of)
         self.cajas_hora = self._convertir_float(cajas_hora)
         
         # Stocks
@@ -82,6 +83,7 @@ def leer_dataset(nombre_archivo):
                         stock_externo=campos[6],    # Stock Externo
                         pedido=campos[7],          # Pedido
                         primera_of=campos[8],       # 1ª OF
+                        of=campos[9],               # OF
                         vta_60=campos[10],         # Vta -60
                         vta_15=campos[11],         # Vta -15
                         m_vta_15=campos[12],       # M_Vta -15
@@ -117,19 +119,26 @@ def calcular_formulas(productos, dias_planificacion=6, dias_no_habiles=0.6667, h
             else:
                 producto.demanda_media = producto.m_vta_15
 
-            # 3. Demanda provisoria
+            # 3. Demanda provisoria *USAR FECHA_DATASET y FECHA_INICIO
             producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
+
+            # 4. Actualizar Disponible *USAR FECHA_DATASET y FECHA_INICIO
+            if producto.primera_of:
+                if producto.primer_of >= '09-01-25' and producto.primera_of < '13-01-25':
+                    producto.disponible = producto.disponible + producto.of
+            else:
+                producto.disponible = producto.disponible
             
-            # 4. Stock Inicial
+            # 5. Stock Inicial *USAR FECHA_DATASET y FECHA_INICIO
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
             
-            # 5. Cobertura Actual
+            # 6. Cobertura Actual
             if producto.demanda_media > 0:
                 producto.cobertura_actual = producto.stock_inicial / producto.demanda_media
             else:
                 producto.cobertura_actual = 0
             
-            # 6. Stock de Seguridad (3 días)
+            # 7. Stock de Seguridad (3 días)
             producto.stock_seguridad = producto.demanda_media * 3
             
             # Filtros
