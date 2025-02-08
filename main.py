@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 import numpy as np
+import pandas as pd
 from scipy.optimize import linprog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,14 +45,12 @@ class Producto:
         self.horas_necesarias = 0
 
     def _convertir_float(self, valor):
-        """Convierte valores a float, maneja valores vacíos y casos especiales"""
         if isinstance(valor, (int, float)):
             return float(valor)
         if isinstance(valor, str):
             if valor.strip() == '' or valor == '(en blanco)':
                 return 0.0
             try:
-                
                 valor = valor.replace(".", "")
                 return float(valor.replace(',', '.'))
             except ValueError:
@@ -59,22 +58,18 @@ class Producto:
         return 0.0
 
 def leer_dataset(nombre_archivo):
-    """Lee el archivo CSV y crea objetos Producto"""
     try:
         productos = []
-        
         with open(nombre_archivo, 'r', encoding='latin1') as file:
-            # Saltar las primeras 5 líneas (encabezados)
             for _ in range(5):
                 next(file)
             
-            # Leer líneas de datos
             for linea in file:
                 if not linea.strip() or linea.startswith('Total general'):
                     continue
                     
                 campos = linea.strip().split(';')
-                if len(campos) >= 15:  # Asegurar que hay suficientes campos
+                if len(campos) >= 15:
                     producto = Producto(
                         cod_art=campos[0],          # COD_ART
                         nom_art=campos[1],          # NOM_ART
@@ -95,22 +90,16 @@ def leer_dataset(nombre_archivo):
                         m_vta_15_mas_aa=campos[18] # M_Vta +15 AA
                     )
                     productos.append(producto)
-        
         return productos
-        
     except Exception as e:
-        print(f"Error leyendo dataset: {str(e)}")
+        logger.error(f"Error leyendo dataset: {str(e)}")
         return None
-    
+
 def leer_indicaciones_articulos():
     try:
         productos_omitir = set()
-        
-        print("\n--- PRODUCTOS A OMITIR POR INDICACIONES ---")  # Agregar este print
-        
         with open('Indicaciones articulos.csv', 'r', encoding='latin1') as file:
             header = file.readline().strip().split(';')
-            
             try:
                 idx_info = header.index('Info extra')
                 idx_cod = header.index('COD_ART')
@@ -129,11 +118,9 @@ def leer_indicaciones_articulos():
                     
                     if info_extra in ['DESCATALOGADO', 'PEDIDO']:
                         productos_omitir.add(cod_art)
-                        print(f"Producto {cod_art} marcado como {info_extra}")  # Agregar este print
         
-        print(f"Total productos a omitir: {len(productos_omitir)}\n")  # Agregar este print
+        logger.info(f"Productos a omitir cargados: {len(productos_omitir)}")
         return productos_omitir
-        
     except FileNotFoundError:
         logger.error("No se encontró el archivo 'Indicaciones articulos.csv'")
         return set()
@@ -141,36 +128,11 @@ def leer_indicaciones_articulos():
         logger.error(f"Error leyendo indicaciones de artículos: {str(e)}")
         return set()
 
-def filtrar_productos_validos(productos, productos_omitir):
-    """
-    Filtra los productos según las indicaciones y otros criterios
-    """
-    productos_validos = []
-    
-    for producto in productos:
-        # Verificar si el producto debe omitirse según indicaciones
-        if producto.cod_art in productos_omitir:
-            logger.debug(f"Producto {producto.cod_art} omitido por estar en lista de exclusión")
-            continue
-            
-        # Aplicar resto de filtros
-        if (producto.vta_60 > 0 and 
-            producto.cajas_hora > 0 and 
-            producto.demanda_media > 0 and 
-            producto.cobertura_inicial != 'NO VALIDO' and 
-            producto.cobertura_final_est != 'NO VALIDO'):
-            
-            productos_validos.append(producto)
-    
-    return productos_validos
-
 def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, horas_mantenimiento=9):
-    """Calcula todas las fórmulas para cada producto y aplica filtros"""
     try:
         # 1. Cálculo de Horas Disponibles
         horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
         
-        # Cargar lista de productos a omitir desde indicaciones
         productos_omitir = leer_indicaciones_articulos()
         productos_validos = []
         
@@ -185,29 +147,27 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             else:
                 producto.demanda_media = producto.m_vta_15
 
-            # 3. Demanda provisoria *USAR FECHA_DATASET y FECHA_INICIO
-            producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
+            # 3. Demanda provisoria
+            producto.demanda_provisoria = producto.demanda_media * (4)
 
-            # 4. Actualizar Disponible *USAR FECHA_DATASET y FECHA_INICIO
+            # 4. Actualizar Disponible
             if producto.primera_of != '(en blanco)':
-                # Convertir las fechas usando los formatos correctos
-                of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')  # Formato dd/mm/yyyy
-                date_inicio = datetime.strptime('13-01-25', '%d-%m-%y')      # Formato dd-mm-yy
-                date_dataset = datetime.strptime('09-01-25', '%d-%m-%y')     # Formato dd-mm-yy
+                of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
+                date_inicio = datetime.strptime('20-01-25', '%d-%m-%y')
+                date_dataset = datetime.strptime('16-01-25', '%d-%m-%y')
 
                 if of_date >= date_dataset and of_date < date_inicio:
                     producto.disponible = producto.disponible + producto.of
-            else:
-                producto.disponible = producto.disponible
             
-            # 5. Stock Inicial *USAR FECHA_DATASET y FECHA_INICIO
+            # 5. Stock Inicial
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
 
             ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
             ## ----------------- CORREGIR PLANIFICACION (ADELANTAR PLANIFICACION)----------------- ##
+            
             if producto.stock_inicial < 0:
                 producto.stock_inicial = 0
-                print(f"Producto {producto.cod_art} - {producto.nom_art}: Stock Inicial negativo. Se ajustó a 0.")
+                logger.warning(f"Producto {producto.cod_art}: Stock Inicial negativo. Se ajustó a 0.")
 
             # 6. Cobertura Inicial  
             if producto.demanda_media > 0:
@@ -215,20 +175,20 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             else:
                 producto.cobertura_inicial = 'NO VALIDO'
             
-            # 7. Demanda Periodo, demanda durante el periodo de planificación
+            # 7. Demanda Periodo
             producto.demanda_periodo = producto.demanda_media * dias_planificacion
             
-            # 8. Stock de Seguridad (3 días)
+            # 8. Stock de Seguridad
             producto.stock_seguridad = producto.demanda_media * 3       
 
-            # 9. Cobertura Final Estimada (SIN PLANIFICACION)
+            # 9. Cobertura Final Estimada
             if producto.demanda_media > 0:
                  producto.cobertura_final_est = (producto.stock_inicial - producto.demanda_periodo) / producto.demanda_media
             else:
                 producto.cobertura_final_est = 'NO VALIDO'
 
-            # Aplicar todos los filtros
-            if (producto.cod_art not in productos_omitir and  # Filtro por indicaciones
+            # Aplicar filtros
+            if (producto.cod_art not in productos_omitir and
                 producto.vta_60 > 0 and 
                 producto.cajas_hora > 0 and 
                 producto.demanda_media > 0 and 
@@ -244,16 +204,11 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
         return None, None
 
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
-    """Aplica el método Simplex para optimizar la producción considerando restricciones"""
     try:
         n_productos = len(productos_validos)
-        cobertura_minima = 5 + dias_planificacion  # Nueva cobertura mínima
+        cobertura_minima = 5 + dias_planificacion
 
-        # Imprimir productos válidos iniciales
-        print("\n--- PRODUCTOS VALIDOS PARA PLANIFICAR ---")
-        print(f"Total de productos validos: {len(productos_validos)}")
-
-        # Función objetivo: priorizar productos con menor cobertura
+        # Función objetivo
         coeficientes = []
         for producto in productos_validos:
             if producto.demanda_media > 0:
@@ -262,42 +217,40 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
                 prioridad = 0
             coeficientes.append(-prioridad)
 
-        # Restricción de igualdad para horas totales
+        # Restricciones
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
-        # Nueva restricción para cobertura mínima
         A_ub = []
         b_ub = []
         for i, producto in enumerate(productos_validos):
             if producto.demanda_media > 0:
                 row = [0] * n_productos
-                row[i] = -1  # Coeficiente para el producto actual
+                row[i] = -1
                 A_ub.append(row)
-                # Stock mínimo = días cobertura * demanda - stock actual
                 stock_min = (producto.demanda_media * cobertura_minima) - producto.stock_inicial
-                b_ub.append(-stock_min)  # Negativo porque la restricción es >=
+                b_ub.append(-stock_min)
 
         A_ub = np.array(A_ub)
         b_ub = np.array(b_ub)
 
-        # Bounds: límites mínimos y máximos para cada producto
+        # Bounds
         bounds = []
         for producto in productos_validos:
             if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
-                min_cajas = 2 * producto.cajas_hora  # Mínimo 2 horas
+                min_cajas = 2 * producto.cajas_hora
                 max_cajas = min(
-                    horas_disponibles * producto.cajas_hora,  # Límite por horas
-                    producto.demanda_media * 60 - producto.stock_inicial  # Límite por cobertura
+                    horas_disponibles * producto.cajas_hora,
+                    producto.demanda_media * 60 - producto.stock_inicial
                 )
-                max_cajas = max(min_cajas, max_cajas)  # Asegurar que max >= min
+                max_cajas = max(min_cajas, max_cajas)
             else:
                 min_cajas = 0
                 max_cajas = 0
             bounds.append((min_cajas, max_cajas))
 
-        # Resolver optimización
+        # Optimización
         result = linprog(
             c=coeficientes,
             A_eq=A_eq,
@@ -310,9 +263,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
 
         if result.success:
             horas_producidas = 0
-            print("\n=== RESULTADOS DE PLANIFICACIÓN ===")
-            print(f"{'Producto':<15} {'Cob.Inicial':>10} {'Cob.Final':>10} {'Desv.Objetivo':>12} {'Horas':>8}")
-            print("-" * 60)
             
             for i, producto in enumerate(productos_validos):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
@@ -323,116 +273,90 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
                     producto.cobertura_final_plan = (
                         producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
-                    # Calcular desviación respecto al objetivo
-                    desviacion = producto.cobertura_final_plan - cobertura_minima
-                    
-                    print(f"{producto.cod_art:<15} {producto.cobertura_inicial:>10.1f} "
-                          f"{producto.cobertura_final_plan:>10.1f} {desviacion:>12.1f} "
-                          f"{producto.horas_necesarias:>8.1f}")
-                else:
-                    producto.cobertura_final_plan = float('inf')
-
-            print(f"\nResumen de producción:")
-            print(f"Horas totales utilizadas: {horas_producidas:.2f}")
-            print(f"Horas disponibles: {horas_disponibles:.2f}")
-            # Calcular estadísticas de desviación
-            desviaciones = []
-            desviaciones_con_prod = []  # Solo productos que requieren producción
             
-            print("\n=== ESTADÍSTICAS DE DESVIACIÓN ===")
-            print(f"Cobertura objetivo: {cobertura_minima:.1f} días")
-            print("\nRangos de desviación:")
-            critico = 0  # 0-5 días
-            aceptable = 0  # 5-20 días
-            alto = 0  # >20 días
-            
-            for producto in productos_validos:
-                if producto.demanda_media > 0:
-                    desviacion = producto.cobertura_final_plan - cobertura_minima
-                    desviaciones.append(desviacion)
-                    if producto.horas_necesarias > 0:
-                        desviaciones_con_prod.append(desviacion)
-                    
-                    if desviacion <= 5:
-                        critico += 1
-                    elif desviacion <= 20:
-                        aceptable += 1
-                    else:
-                        alto += 1
-            
-            print(f"Crítico (0-5 días): {critico} productos")
-            print(f"Aceptable (5-20 días): {aceptable} productos")
-            print(f"Alto (>20 días): {alto} productos")
-            
-            print("\nEstadísticas globales:")
-            print(f"Desviación media total: {np.mean(desviaciones):.1f} días")
-            print(f"Desviación estándar total: {np.std(desviaciones):.1f} días")
-            print(f"Desviación mínima: {min(desviaciones):.1f} días")
-            print(f"Desviación máxima: {max(desviaciones):.1f} días")
-            
-            if desviaciones_con_prod:
-                print("\nEstadísticas de productos con producción:")
-                print(f"Desviación media: {np.mean(desviaciones_con_prod):.1f} días")
-                print(f"Desviación estándar: {np.std(desviaciones_con_prod):.1f} días")
-                print(f"Desviación mínima: {min(desviaciones_con_prod):.1f} días")
-                print(f"Desviación máxima: {max(desviaciones_con_prod):.1f} días")
-
+            logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
             return productos_validos
         else:
-            print(f"Error en optimización: {result.message}")
-            # Imprimir más información de diagnóstico
-            print(f"Dimensiones de matrices:")
-            print(f"Coeficientes: {len(coeficientes)}")
-            print(f"A_eq: {A_eq.shape}")
-            print(f"A_ub: {A_ub.shape}")
-            print(f"Bounds: {len(bounds)}")
+            logger.error(f"Error en optimización: {result.message}")
             return None
 
     except Exception as e:
-        print(f"Error en Simplex: {str(e)}")
-        print(f"Traza completa:", exc_info=True)
+        logger.error(f"Error en Simplex: {str(e)}")
         return None
+
+def exportar_resultados(productos_optimizados, fecha_planificacion):
+    try:
+        datos = []
+        for producto in productos_optimizados:
+            if producto.horas_necesarias > 0:
+                datos.append({
+                    'COD_ART': producto.cod_art,
+                    'NOM_ART': producto.nom_art,
+                    'Demanda_Media': round(producto.demanda_media, 2),
+                    'Stock_Inicial': round(producto.stock_inicial, 2),
+                    'Cajas_a_Producir': producto.cajas_a_producir,
+                    'Horas_Necesarias': round(producto.horas_necesarias, 2),
+                    'Cobertura_Inicial': round(producto.cobertura_inicial, 2),
+                    'Cobertura_Final': round(producto.cobertura_final_plan, 2),
+                    'Cobertura_Final_Est': round(producto.cobertura_final_est, 2),
+                    'Desviacion': round(producto.cobertura_final_plan - (5 + 6), 2)
+                })
+        
+        df = pd.DataFrame(datos)
+        nombre_archivo = f"planificacion_{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
+        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',')
+        logger.info(f"Resultados exportados a {nombre_archivo}")
+        
+    except Exception as e:
+        logger.error(f"Error exportando resultados: {str(e)}")
 
 def main():
     try:
-        # 1. Leer dataset
-        logger.info("Iniciando lectura del dataset...")
-        productos = leer_dataset('Dataset 09-01-25.csv')
+        logger.info("Iniciando planificación de producción...")
+        
+        # Fechas
+        fecha_dataset = datetime.strptime('16-01-2025', '%d-%m-%Y')
+        fecha_planificacion = datetime.strptime('20-01-2025', '%d-%m-%Y')
+        nombre_dataset = 'Dataset 16-01-25.csv'
+        
+        # Parámetros de planificación
+        dias_planificacion = 6
+        dias_no_habiles = 1.6667
+        horas_mantenimiento = 9
+        
+        # 1. Leer dataset y calcular fórmulas
+        productos = leer_dataset(nombre_dataset)
         if not productos:
             raise ValueError("Error al leer el dataset")
         
-        # 2. Filtrar y calcular fórmulas
-        logger.info("Realizando cálculos...")
-        productos_validos, horas_disponibles = calcular_formulas(productos)
+        productos_validos, horas_disponibles = calcular_formulas(
+            productos, 
+            dias_planificacion=dias_planificacion,
+            dias_no_habiles=dias_no_habiles,
+            horas_mantenimiento=horas_mantenimiento
+        )
         
         if not productos_validos:
             raise ValueError("Error en los cálculos")
         
-        # 3. Aplicar Simplex
-        logger.info("Aplicando optimización Simplex...")
-        productos_optimizados = aplicar_simplex(productos_validos, horas_disponibles, 6)
+        # 2. Aplicar Simplex
+        productos_optimizados = aplicar_simplex(
+            productos_validos, 
+            horas_disponibles, 
+            dias_planificacion
+        )
         
-        # 4. Imprimir resumen de productos tras Simplex
-        if productos_optimizados:
-            print("\n--- RESUMEN DE PRODUCTOS TRAS OPTIMIZACIÓN ---")
-            print (f"Horas disponibles: {horas_disponibles:.2f}")
-            print(f"Total de productos optimizados: {len(productos_optimizados)}")
-            print("\nDetalle de productos:")
-            for producto in productos_optimizados:
-                if producto.horas_necesarias > 0:
-                    print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
-                    print(f"Demanda media: {producto.demanda_media:.2f}")
-                    print(f"Stock inicial: {producto.stock_inicial:.2f}")
-                    print(f"Cajas a producir: {producto.cajas_a_producir}")
-                    print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
-                    print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
-                    print(f"Cobertura final: {producto.cobertura_final_plan:.2f}")
-                    print(f"Cobertura Final Est: {producto.cobertura_final_est:.2f}")
+        if not productos_optimizados:
+            raise ValueError("Error en la optimización")
         
-        logger.info("Proceso completado exitosamente")
+        # 3. Exportar resultados
+        exportar_resultados(productos_optimizados, fecha_planificacion)
+        
+        logger.info("Planificación completada exitosamente")
         
     except Exception as e:
         logger.error(f"Error en ejecución: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     main()
