@@ -168,14 +168,14 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             # Filtros
             if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
                 productos_validos.append(producto)
-            else:
+            #else:
                 # imprimir toda la data de los productos que no pasaron el filtro
-                print(f"Producto {producto.cod_art} - {producto.nom_art} no cumple con los requisitos para planificar.")
-                print(f"Demanda media: {producto.demanda_media:.2f}")
-                print(f"Stock total inicial: {producto.stock_inicial:.2f}")
-                print(f"Cobertura inicial: {producto.cobertura_inicial}")
-                print(f"Stock de seguridad: {producto.stock_seguridad}")
-                print(f"Cobertura final estimada: {producto.cobertura_final_est}")
+                #print(f"Producto {producto.cod_art} - {producto.nom_art} no cumple con los requisitos para planificar.")
+                #print(f"Demanda media: {producto.demanda_media:.2f}")
+                #print(f"Stock total inicial: {producto.stock_inicial:.2f}")
+                #print(f"Cobertura inicial: {producto.cobertura_inicial}")
+                #print(f"Stock de seguridad: {producto.stock_seguridad}")
+                #print(f"Cobertura final estimada: {producto.cobertura_final_est}")
 
         
         return productos_validos, horas_disponibles
@@ -189,18 +189,30 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
     try:
         n_productos = len(productos_validos)
 
-        # Función objetivo: minimizar déficit 
+        #Imprimir productos validos
+        print("\n--- PRODUCTOS VALIDOS PARA PLANIFICAR ---")
+        print(f"Total de productos validos: {len(productos_validos)}")
+        for producto in productos_validos:
+            print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
+            print(f"Demanda media: {producto.demanda_media:.2f}")
+            print(f"Stock inicial: {producto.stock_inicial:.2f}")
+            print(f"Cajas a producir: {producto.cajas_a_producir}")
+            print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
+            print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
+        
+        # Función objetivo: minimizar diferencia
         coeficientes = [
-            abs(producto.demanda_media * dias_planificacion - producto.stock_inicial) 
+            abs(producto.demanda_media - producto.stock_inicial) 
             for producto in productos_validos
         ]
+
 
         # Matriz de restricciones
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
-        # Restricciones de producción mínima (al menos 2 horas)
+        # Restricciones de producción mínima > 2 horas
         A_ub = np.zeros((n_productos + 1, n_productos))
         for i in range(n_productos):
             A_ub[i, i] = -1 / productos_validos[i].cajas_hora  # Evita valores negativos
@@ -209,7 +221,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         # Restricción de cobertura máxima (no más de 60 días de stock)
         A_ub[-1] = [producto.demanda_media * 60 - producto.stock_inicial for producto in productos_validos]
         b_ub.append(0)
-
         result = linprog(
             c=coeficientes,
             A_eq=A_eq,
@@ -220,17 +231,18 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         )
 
         if result.success:
+            horas_productidas = 0
             for i, producto in enumerate(productos_validos):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-
+                horas_productidas = producto.horas_necesarias + horas_productidas
                 # 10. Cobertura Final Estimada (CON PLANIFICACION)
                 if producto.demanda_media > 0:
-                    producto.cobertura_final_plan = (producto.stock_inicial - producto.demanda_periodo + producto.cajas_hora * horas_disponibles) / producto.demanda_media
+                    producto.cobertura_final_plan = (producto.stock_inicial - producto.demanda_periodo + producto.cajas_hora * producto.horas_necesarias) / producto.demanda_media
                 else:
                     producto.cobertura_final_plan = 'NO VALIDO'
 
-
+            print(f"Horas producidas: {horas_productidas:.2f}")
             return productos_validos
 
         else:
@@ -263,16 +275,19 @@ def main():
         # 4. Imprimir resumen de productos tras Simplex
         if productos_optimizados:
             print("\n--- RESUMEN DE PRODUCTOS TRAS OPTIMIZACIÓN ---")
+            print (f"Horas disponibles: {horas_disponibles:.2f}")
             print(f"Total de productos optimizados: {len(productos_optimizados)}")
             print("\nDetalle de productos:")
             for producto in productos_optimizados:
-                print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
-                print(f"Demanda media: {producto.demanda_media:.2f}")
-                print(f"Stock total inicial: {producto.stock_inicial:.2f}")
-                print(f"Cajas a producir: {producto.cajas_a_producir}")
-                print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
-                print(f"Cobertura actual: {producto.cobertura_inicial:.2f}")
-                print(f"Stock de seguridad: {producto.stock_seguridad:.2f}")
+                #if producto.cobertura_final_plan < 0:
+                    print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
+                    print(f"Demanda media: {producto.demanda_media:.2f}")
+                    print(f"Stock inicial: {producto.stock_inicial:.2f}")
+                    print(f"Cajas a producir: {producto.cajas_a_producir}")
+                    print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
+                    print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
+                    print(f"Cobertura final: {producto.cobertura_final_plan:.2f}")
+                    print(f"Cobertura Final Est: {producto.cobertura_final_est:.2f}")
         
         logger.info("Proceso completado exitosamente")
         
