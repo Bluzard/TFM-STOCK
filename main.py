@@ -51,6 +51,8 @@ class Producto:
             if valor.strip() == '' or valor == '(en blanco)':
                 return 0.0
             try:
+                
+                valor = valor.replace(".", "")
                 return float(valor.replace(',', '.'))
             except ValueError:
                 return 0.0
@@ -118,6 +120,20 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
                     producto.demanda_media = producto.m_vta_15
             else:
                 producto.demanda_media = producto.m_vta_15
+
+
+            # DEMANDA MEDIA PRODUCTO 5720811
+            if producto.cod_art == '5720811':
+                print(f"Producto {producto.cod_art} - {producto.nom_art}: Demanda media: {producto.demanda_media:.2f}")
+                print(f"Variación AA: {variacion_aa:.2f}")
+                print(f"Vta -15: {producto.vta_15:.2f}")
+                print(f"Vta -15 AA: {producto.vta_15_aa:.2f}")
+                print(f"Vta +15 AA: {producto.vta_15_mas_aa:.2f}")
+                print(f"M_Vta -15: {producto.m_vta_15:.2f}")
+                print(f"M_Vta -15 AA: {producto.m_vta_15_aa:.2f}")
+                print(f"M_Vta +15 AA: {producto.m_vta_15_mas_aa:.2f}")
+
+
 
             # 3. Demanda provisoria *USAR FECHA_DATASET y FECHA_INICIO
             producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
