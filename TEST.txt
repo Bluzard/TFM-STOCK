@@ -3,3 +3,14 @@ fecha
 manzana
 azul
 casa
+------------------------------------------------------------------------
+
+Funciones faltantes:
+
+-Filtro por tipo de productos (según listado provisto por Javier)
+
+-demanda_periodo (Según clasificación pedido) - Lin 34
+    =SI([@Clasificación]="PEDIDO";[@Pedido];[@[demanda_media]]*$AV$2)
+
+
+-Simplex:

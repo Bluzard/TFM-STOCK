@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 class PlanificadorProduccion:
     def __init__(self):
+       ## Parámetros base para la planificación
         self.COBERTURA_MIN = 3  # Cobertura stock de seguridad mínima (días)
         self.COBERTURA_MAX = 60  # Máxima cobertura de stock permitida (días)
         self.DEMANDA_60D_MIN = 0  # Umbral mínimo de ventas en 60 días (Cj)
@@ -33,10 +34,10 @@ class PlanificadorProduccion:
             df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
             df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
             df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
+            df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo'])/ df_work['demanda_media']).round(1)
             
             # Filtrar productos que necesitan producción
             df_work = df_work[df_work['cobertura_inicial'] < self.COBERTURA_MAX]
-            
             logger.info(f"Lista entrada al Simplex con {len(df_work)} filas:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial']]}")
             
             if df_work.empty:
@@ -122,7 +123,7 @@ class PlanificadorProduccion:
 
         # Calcular variación interanual
         with np.errstate(divide='ignore', invalid='ignore'):
-            df['variacion_aa'] = np.abs(1 - df['M_Vta +15 AA'] / df['M_Vta -15 AA'])
+            df['variacion_aa'] = np.abs(df['M_Vta +15 AA'] / df['M_Vta -15 AA']-1)
         df['variacion_aa'] = df['variacion_aa'].fillna(0)
 
         # Calcular demanda media
@@ -223,7 +224,7 @@ class PlanificadorProduccion:
     def generar_plan_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles, fecha_inicio=None, usar_simplex=False):
         try:
             logger.info("=== Iniciando generación de plan ===")
-            logger.info(f"{'Usando Simplex' if usar_simplex else 'Usando método propio'}")
+            #logger.info(f"{'Usando Simplex' if usar_simplex else 'Usando método propio'}")
             logger.info(f"Columnas disponibles: {df.columns.tolist()}")
             logger.info(f"Datos iniciales:\n{df[['COD_ART', 'Disponible','stock_inicial', 'demanda_media', 'Cj/H','1ª OF', 'OF']]}")
             
@@ -234,9 +235,10 @@ class PlanificadorProduccion:
             # Generar producción óptima
             produccion_optima = (
                 self.simplex(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
-                if usar_simplex else
-                self.optimizar_produccion(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
-            )
+                )
+                #if usar_simplex else
+                #self.optimizar_produccion(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
+            
             
             # Validar producción óptima
             if produccion_optima is None:
