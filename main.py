@@ -200,28 +200,33 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
             print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
             print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
 
-        # Función objetivo: minimizar déficit entre demanda y stock
+        # Función objetivo: priorizar productos con menor cobertura
         coeficientes = []
         for producto in productos_validos:
-            deficit = producto.demanda_media - producto.stock_inicial
-            coeficientes.append(max(0, deficit))
+            if producto.demanda_media > 0:
+                prioridad = max(0, 1/producto.cobertura_inicial)
+            else:
+                prioridad = 0
+            coeficientes.append(-prioridad)
 
         # Restricción de igualdad para horas totales
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
-        # Definir límites por producto (bounds)
+        # Bounds: límites mínimos y máximos para cada producto
         bounds = []
         for producto in productos_validos:
-            # Mínimo: 2 horas convertidas a cajas
-            min_cajas = 2 * producto.cajas_hora if producto.demanda_media > 0 else 0
-            
-            # Máximo: el menor entre capacidad total y límite de 60 días
-            max_por_horas = producto.cajas_hora * horas_disponibles
-            max_por_cobertura = max(0, producto.demanda_media * 60 - producto.stock_inicial)
-            max_cajas = min(max_por_horas, max_por_cobertura)
-            
+            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
+                min_cajas = 2 * producto.cajas_hora  # Mínimo 2 horas
+                max_cajas = min(
+                    horas_disponibles * producto.cajas_hora,  # Límite por horas
+                    producto.demanda_media * 60 - producto.stock_inicial  # Límite por cobertura
+                )
+                max_cajas = max(min_cajas, max_cajas)  # Asegurar que max >= min
+            else:
+                min_cajas = 0
+                max_cajas = 0
             bounds.append((min_cajas, max_cajas))
 
         # Resolver optimización
@@ -234,30 +239,30 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         )
 
         if result.success:
-            horas_productidas = 0
+            horas_producidas = 0
             for i, producto in enumerate(productos_validos):
-                # Asignar resultados
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                horas_productidas += producto.horas_necesarias
-
-                # Calcular cobertura final
+                horas_producidas += producto.horas_necesarias
+                
                 if producto.demanda_media > 0:
-                    stock_final = (producto.stock_inicial + 
-                                 producto.cajas_a_producir - 
-                                 producto.demanda_media * dias_planificacion)
-                    producto.cobertura_final_plan = stock_final / producto.demanda_media
+                    producto.cobertura_final_plan = (
+                        producto.stock_inicial + producto.cajas_a_producir
+                    ) / producto.demanda_media
                 else:
                     producto.cobertura_final_plan = 'NO VALIDO'
 
-            print(f"\nHoras producidas: {horas_productidas:.2f}")
+            print(f"\nResumen de producción:")
+            print(f"Horas totales utilizadas: {horas_producidas:.2f}")
             print(f"Horas disponibles: {horas_disponibles:.2f}")
-            print(f"Diferencia: {abs(horas_disponibles - horas_productidas):.2f}")
-            
             return productos_validos
-
         else:
             print(f"Error en optimización: {result.message}")
+            # Imprimir más información de diagnóstico
+            print(f"Dimensiones de matrices:")
+            print(f"Coeficientes: {len(coeficientes)}")
+            print(f"A_eq: {A_eq.shape}")
+            print(f"Bounds: {len(bounds)}")
             return None
 
     except Exception as e:
