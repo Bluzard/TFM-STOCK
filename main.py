@@ -166,7 +166,7 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
 
 
             # Filtros
-            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
+            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_final_est < 60 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
                 productos_validos.append(producto)
             #else:
                 # imprimir toda la data de los productos que no pasaron el filtro
@@ -189,7 +189,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
     try:
         n_productos = len(productos_validos)
 
-        #Imprimir productos validos
+        # Imprimir productos válidos iniciales
         print("\n--- PRODUCTOS VALIDOS PARA PLANIFICAR ---")
         print(f"Total de productos validos: {len(productos_validos)}")
         for producto in productos_validos:
@@ -199,50 +199,61 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
             print(f"Cajas a producir: {producto.cajas_a_producir}")
             print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
             print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
-        
-        # Función objetivo: minimizar diferencia
-        coeficientes = [
-            abs(producto.demanda_media - producto.stock_inicial) 
-            for producto in productos_validos
-        ]
 
+        # Función objetivo: minimizar déficit entre demanda y stock
+        coeficientes = []
+        for producto in productos_validos:
+            deficit = producto.demanda_media - producto.stock_inicial
+            coeficientes.append(max(0, deficit))
 
-        # Matriz de restricciones
+        # Restricción de igualdad para horas totales
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
-        # Restricciones de producción mínima > 2 horas
-        A_ub = np.zeros((n_productos + 1, n_productos))
-        for i in range(n_productos):
-            A_ub[i, i] = -1 / productos_validos[i].cajas_hora  # Evita valores negativos
-        b_ub = [-2] * n_productos
+        # Definir límites por producto (bounds)
+        bounds = []
+        for producto in productos_validos:
+            # Mínimo: 2 horas convertidas a cajas
+            min_cajas = 2 * producto.cajas_hora if producto.demanda_media > 0 else 0
+            
+            # Máximo: el menor entre capacidad total y límite de 60 días
+            max_por_horas = producto.cajas_hora * horas_disponibles
+            max_por_cobertura = max(0, producto.demanda_media * 60 - producto.stock_inicial)
+            max_cajas = min(max_por_horas, max_por_cobertura)
+            
+            bounds.append((min_cajas, max_cajas))
 
-        # Restricción de cobertura máxima (no más de 60 días de stock)
-        A_ub[-1] = [producto.demanda_media * 60 - producto.stock_inicial for producto in productos_validos]
-        b_ub.append(0)
+        # Resolver optimización
         result = linprog(
             c=coeficientes,
             A_eq=A_eq,
             b_eq=b_eq,
-            A_ub=A_ub,
-            b_ub=b_ub,
+            bounds=bounds,
             method='highs'
         )
 
         if result.success:
             horas_productidas = 0
             for i, producto in enumerate(productos_validos):
+                # Asignar resultados
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                horas_productidas = producto.horas_necesarias + horas_productidas
-                # 10. Cobertura Final Estimada (CON PLANIFICACION)
+                horas_productidas += producto.horas_necesarias
+
+                # Calcular cobertura final
                 if producto.demanda_media > 0:
-                    producto.cobertura_final_plan = (producto.stock_inicial - producto.demanda_periodo + producto.cajas_hora * producto.horas_necesarias) / producto.demanda_media
+                    stock_final = (producto.stock_inicial + 
+                                 producto.cajas_a_producir - 
+                                 producto.demanda_media * dias_planificacion)
+                    producto.cobertura_final_plan = stock_final / producto.demanda_media
                 else:
                     producto.cobertura_final_plan = 'NO VALIDO'
 
-            print(f"Horas producidas: {horas_productidas:.2f}")
+            print(f"\nHoras producidas: {horas_productidas:.2f}")
+            print(f"Horas disponibles: {horas_disponibles:.2f}")
+            print(f"Diferencia: {abs(horas_disponibles - horas_productidas):.2f}")
+            
             return productos_validos
 
         else:
@@ -251,6 +262,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
 
     except Exception as e:
         print(f"Error en Simplex: {str(e)}")
+        print(f"Traza completa:", exc_info=True)
         return None
 
 def main():
