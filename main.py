@@ -38,7 +38,7 @@ class Producto:
         # Campos calculados (inicialmente 0)
         self.demanda_media = 0
         self.stock_inicial = 0
-        self.cobertura_actual = 0
+        self.cobertura_inicial = 0
         self.stock_seguridad = 0
         self.cajas_a_producir = 0
         self.horas_necesarias = 0
@@ -100,7 +100,7 @@ def leer_dataset(nombre_archivo):
         print(f"Error leyendo dataset: {str(e)}")
         return None
 
-def calcular_formulas(productos, dias_planificacion=6, dias_no_habiles=0.6667, horas_mantenimiento=9):
+def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, horas_mantenimiento=9):
     """Calcula todas las fórmulas para cada producto"""
     try:
         # 1. Cálculo de Horas Disponibles
@@ -123,27 +123,60 @@ def calcular_formulas(productos, dias_planificacion=6, dias_no_habiles=0.6667, h
             producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
 
             # 4. Actualizar Disponible *USAR FECHA_DATASET y FECHA_INICIO
-            if producto.primera_of:
-                if producto.primer_of >= '09-01-25' and producto.primera_of < '13-01-25':
+            if producto.primera_of != '(en blanco)':
+                
+                # Convertir las fechas usando los formatos correctos
+                of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')  # Formato dd/mm/yyyy
+                date_inicio = datetime.strptime('13-01-25', '%d-%m-%y')      # Formato dd-mm-yy
+                date_dataset = datetime.strptime('09-01-25', '%d-%m-%y')     # Formato dd-mm-yy
+
+                if of_date >= date_dataset and of_date < date_inicio:
                     producto.disponible = producto.disponible + producto.of
             else:
                 producto.disponible = producto.disponible
             
             # 5. Stock Inicial *USAR FECHA_DATASET y FECHA_INICIO
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
-            
-            # 6. Cobertura Actual
+
+            ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
+            ## ----------------- CORREGIR PLANIFICACION (ADELANTAR PLANIFICACION)----------------- ##
+            if producto.stock_inicial < 0:
+                producto.stock_inicial = 0
+                print(f"Producto {producto.cod_art} - {producto.nom_art}: Stock Inicial negativo. Se ajustó a 0.")
+
+            # 6. Cobertura Inicial  
             if producto.demanda_media > 0:
-                producto.cobertura_actual = producto.stock_inicial / producto.demanda_media
+                producto.cobertura_inicial = producto.stock_inicial / producto.demanda_media
             else:
-                producto.cobertura_actual = 0
+                producto.cobertura_inicial = 'NO VALIDO'
             
-            # 7. Stock de Seguridad (3 días)
-            producto.stock_seguridad = producto.demanda_media * 3
+            # 7. Demanda Periodo, demanda durante el periodo de planificación
+            producto.demanda_periodo = producto.demanda_media * dias_planificacion
             
+            # 8. Stock de Seguridad (3 días)
+            producto.stock_seguridad = producto.demanda_media * 3       
+
+            # 9. Cobertura Final Estimada (SIN PLANIFICACION)
+            if producto.demanda_media > 0:
+                 producto.cobertura_final_est = (producto.stock_inicial - producto.demanda_periodo) / producto.demanda_media
+            else:
+                producto.cobertura_final_est = 'NO VALIDO'
+
+            ## FILTRO POR ARTICULOS EN DOCUMENTO (INDICACIONES ARTICULOS.CSV) DESCATALOGADO Y PEDIDO            
+
+
             # Filtros
-            if producto.vta_60 > 0 and producto.cajas_hora > 0:
+            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
                 productos_validos.append(producto)
+            else:
+                # imprimir toda la data de los productos que no pasaron el filtro
+                print(f"Producto {producto.cod_art} - {producto.nom_art} no cumple con los requisitos para planificar.")
+                print(f"Demanda media: {producto.demanda_media:.2f}")
+                print(f"Stock total inicial: {producto.stock_inicial:.2f}")
+                print(f"Cobertura inicial: {producto.cobertura_inicial}")
+                print(f"Stock de seguridad: {producto.stock_seguridad}")
+                print(f"Cobertura final estimada: {producto.cobertura_final_est}")
+
         
         return productos_validos, horas_disponibles
         
@@ -191,6 +224,13 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
 
+                # 10. Cobertura Final Estimada (CON PLANIFICACION)
+                if producto.demanda_media > 0:
+                    producto.cobertura_final_plan = (producto.stock_inicial - producto.demanda_periodo + producto.cajas_hora * horas_disponibles) / producto.demanda_media
+                else:
+                    producto.cobertura_final_plan = 'NO VALIDO'
+
+
             return productos_validos
 
         else:
@@ -231,7 +271,7 @@ def main():
                 print(f"Stock total inicial: {producto.stock_inicial:.2f}")
                 print(f"Cajas a producir: {producto.cajas_a_producir}")
                 print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
-                print(f"Cobertura actual: {producto.cobertura_actual:.2f}")
+                print(f"Cobertura actual: {producto.cobertura_inicial:.2f}")
                 print(f"Stock de seguridad: {producto.stock_seguridad:.2f}")
         
         logger.info("Proceso completado exitosamente")
