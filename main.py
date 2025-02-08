@@ -166,7 +166,7 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
 
 
             # Filtros
-            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_final_est < 60 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
+            if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
                 productos_validos.append(producto)
             #else:
                 # imprimir toda la data de los productos que no pasaron el filtro
@@ -296,7 +296,7 @@ def main():
             print(f"Total de productos optimizados: {len(productos_optimizados)}")
             print("\nDetalle de productos:")
             for producto in productos_optimizados:
-                #if producto.cobertura_final_plan < 0:
+                if producto.horas_necesarias > 0:
                     print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
                     print(f"Demanda media: {producto.demanda_media:.2f}")
                     print(f"Stock inicial: {producto.stock_inicial:.2f}")
