@@ -121,20 +121,6 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             else:
                 producto.demanda_media = producto.m_vta_15
 
-
-            # DEMANDA MEDIA PRODUCTO 5720811
-            if producto.cod_art == '5720811':
-                print(f"Producto {producto.cod_art} - {producto.nom_art}: Demanda media: {producto.demanda_media:.2f}")
-                print(f"Variación AA: {variacion_aa:.2f}")
-                print(f"Vta -15: {producto.vta_15:.2f}")
-                print(f"Vta -15 AA: {producto.vta_15_aa:.2f}")
-                print(f"Vta +15 AA: {producto.vta_15_mas_aa:.2f}")
-                print(f"M_Vta -15: {producto.m_vta_15:.2f}")
-                print(f"M_Vta -15 AA: {producto.m_vta_15_aa:.2f}")
-                print(f"M_Vta +15 AA: {producto.m_vta_15_mas_aa:.2f}")
-
-
-
             # 3. Demanda provisoria *USAR FECHA_DATASET y FECHA_INICIO
             producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
 
@@ -184,16 +170,7 @@ def calcular_formulas(productos, dias_planificacion=7, dias_no_habiles=1.6667, h
             # Filtros
             if producto.vta_60 > 0 and producto.cajas_hora > 0 and producto.demanda_media > 0 and producto.cobertura_inicial != 'NO VALIDO' and producto.cobertura_final_est != 'NO VALIDO':
                 productos_validos.append(producto)
-            #else:
-                # imprimir toda la data de los productos que no pasaron el filtro
-                #print(f"Producto {producto.cod_art} - {producto.nom_art} no cumple con los requisitos para planificar.")
-                #print(f"Demanda media: {producto.demanda_media:.2f}")
-                #print(f"Stock total inicial: {producto.stock_inicial:.2f}")
-                #print(f"Cobertura inicial: {producto.cobertura_inicial}")
-                #print(f"Stock de seguridad: {producto.stock_seguridad}")
-                #print(f"Cobertura final estimada: {producto.cobertura_final_est}")
-
-        
+                    
         return productos_validos, horas_disponibles
         
     except Exception as e:
@@ -204,17 +181,11 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
     """Aplica el método Simplex para optimizar la producción considerando restricciones"""
     try:
         n_productos = len(productos_validos)
+        cobertura_minima = 5 + dias_planificacion  # Nueva cobertura mínima
 
         # Imprimir productos válidos iniciales
         print("\n--- PRODUCTOS VALIDOS PARA PLANIFICAR ---")
         print(f"Total de productos validos: {len(productos_validos)}")
-        for producto in productos_validos:
-            print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
-            print(f"Demanda media: {producto.demanda_media:.2f}")
-            print(f"Stock inicial: {producto.stock_inicial:.2f}")
-            print(f"Cajas a producir: {producto.cajas_a_producir}")
-            print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
-            print(f"Cobertura inicial: {producto.cobertura_inicial:.2f}")
 
         # Función objetivo: priorizar productos con menor cobertura
         coeficientes = []
@@ -229,6 +200,21 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
+
+        # Nueva restricción para cobertura mínima
+        A_ub = []
+        b_ub = []
+        for i, producto in enumerate(productos_validos):
+            if producto.demanda_media > 0:
+                row = [0] * n_productos
+                row[i] = -1  # Coeficiente para el producto actual
+                A_ub.append(row)
+                # Stock mínimo = días cobertura * demanda - stock actual
+                stock_min = (producto.demanda_media * cobertura_minima) - producto.stock_inicial
+                b_ub.append(-stock_min)  # Negativo porque la restricción es >=
+
+        A_ub = np.array(A_ub)
+        b_ub = np.array(b_ub)
 
         # Bounds: límites mínimos y máximos para cada producto
         bounds = []
@@ -250,12 +236,18 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
             c=coeficientes,
             A_eq=A_eq,
             b_eq=b_eq,
+            A_ub=A_ub,
+            b_ub=b_ub,
             bounds=bounds,
             method='highs'
         )
 
         if result.success:
             horas_producidas = 0
+            print("\n=== RESULTADOS DE PLANIFICACIÓN ===")
+            print(f"{'Producto':<15} {'Cob.Inicial':>10} {'Cob.Final':>10} {'Desv.Objetivo':>12} {'Horas':>8}")
+            print("-" * 60)
+            
             for i, producto in enumerate(productos_validos):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
@@ -265,12 +257,16 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
                     producto.cobertura_final_plan = (
                         producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
+                    # Calcular desviación respecto al objetivo
+                    desviacion = producto.cobertura_final_plan - cobertura_minima
+                    
+                    print(f"{producto.cod_art:<15} {producto.cobertura_inicial:>10.1f} "
+                          f"{producto.cobertura_final_plan:>10.1f} {desviacion:>12.1f} "
+                          f"{producto.horas_necesarias:>8.1f}")
                 else:
-                    producto.cobertura_final_plan = 'NO VALIDO'
+                    producto.cobertura_final_plan = float('inf')
 
-            print(f"\nResumen de producción:")
-            print(f"Horas totales utilizadas: {horas_producidas:.2f}")
-            print(f"Horas disponibles: {horas_disponibles:.2f}")
+          
             return productos_validos
         else:
             print(f"Error en optimización: {result.message}")
@@ -278,6 +274,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
             print(f"Dimensiones de matrices:")
             print(f"Coeficientes: {len(coeficientes)}")
             print(f"A_eq: {A_eq.shape}")
+            print(f"A_ub: {A_ub.shape}")
             print(f"Bounds: {len(bounds)}")
             return None
 
