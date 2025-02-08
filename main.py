@@ -8,12 +8,13 @@ logger = logging.getLogger(__name__)
 
 class Producto:
     def __init__(self, cod_art, nom_art, cod_gru, cajas_hora, disponible, calidad, 
-                 stock_externo, pedido, primera_of, vta_60, vta_15, m_vta_15, 
+                 stock_externo, pedido, primera_of, of, vta_60, vta_15, m_vta_15, 
                  vta_15_aa, m_vta_15_aa, vta_15_mas_aa, m_vta_15_mas_aa):
         # Datos básicos
         self.cod_art = cod_art
         self.nom_art = nom_art
         self.cod_gru = cod_gru
+        self.of = self._convertir_float(of)
         self.cajas_hora = self._convertir_float(cajas_hora)
         
         # Stocks
@@ -36,7 +37,7 @@ class Producto:
         
         # Campos calculados (inicialmente 0)
         self.demanda_media = 0
-        self.stock_total = 0
+        self.stock_inicial = 0
         self.cobertura_actual = 0
         self.stock_seguridad = 0
         self.cajas_a_producir = 0
@@ -82,6 +83,7 @@ def leer_dataset(nombre_archivo):
                         stock_externo=campos[6],    # Stock Externo
                         pedido=campos[7],          # Pedido
                         primera_of=campos[8],       # 1ª OF
+                        of=campos[9],               # OF
                         vta_60=campos[10],         # Vta -60
                         vta_15=campos[11],         # Vta -15
                         m_vta_15=campos[12],       # M_Vta -15
@@ -107,26 +109,36 @@ def calcular_formulas(productos, dias_planificacion=6, dias_no_habiles=0.6667, h
         productos_validos = []
         
         for producto in productos:
-            # Cálculo de demanda media
+            # 2. Cálculo de demanda media
             if producto.m_vta_15_aa > 0:
                 variacion_aa = abs(1 - (producto.vta_15_mas_aa / producto.vta_15_aa))
-                if variacion_aa > 0.20:
-                    producto.demanda_media = producto.m_vta_15 * (1 + variacion_aa) / 15
+                if variacion_aa > 0.20 and variacion_aa < 1:
+                    producto.demanda_media = producto.m_vta_15 * (producto.vta_15_mas_aa / producto.vta_15_aa)
                 else:
-                    producto.demanda_media = producto.m_vta_15 / 15
+                    producto.demanda_media = producto.m_vta_15
             else:
-                producto.demanda_media = 0
+                producto.demanda_media = producto.m_vta_15
+
+            # 3. Demanda provisoria *USAR FECHA_DATASET y FECHA_INICIO
+            producto.demanda_provisoria = producto.demanda_media * (4)  #(fecha_inicio - fecha_dataset)
+
+            # 4. Actualizar Disponible *USAR FECHA_DATASET y FECHA_INICIO
+            if producto.primera_of:
+                if producto.primer_of >= '09-01-25' and producto.primera_of < '13-01-25':
+                    producto.disponible = producto.disponible + producto.of
+            else:
+                producto.disponible = producto.disponible
             
-            # Stock Total
-            producto.stock_total = producto.disponible + producto.calidad + producto.stock_externo
+            # 5. Stock Inicial *USAR FECHA_DATASET y FECHA_INICIO
+            producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
             
-            # Cobertura Actual
+            # 6. Cobertura Actual
             if producto.demanda_media > 0:
-                producto.cobertura_actual = producto.stock_total / producto.demanda_media
+                producto.cobertura_actual = producto.stock_inicial / producto.demanda_media
             else:
                 producto.cobertura_actual = 0
             
-            # Stock de Seguridad (3 días)
+            # 7. Stock de Seguridad (3 días)
             producto.stock_seguridad = producto.demanda_media * 3
             
             # Filtros
@@ -146,7 +158,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
 
         # Función objetivo: minimizar déficit 
         coeficientes = [
-            abs(producto.demanda_media * dias_planificacion - producto.stock_total) 
+            abs(producto.demanda_media * dias_planificacion - producto.stock_inicial) 
             for producto in productos_validos
         ]
 
@@ -162,7 +174,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion):
         b_ub = [-2] * n_productos
 
         # Restricción de cobertura máxima (no más de 60 días de stock)
-        A_ub[-1] = [producto.demanda_media * 60 - producto.stock_total for producto in productos_validos]
+        A_ub[-1] = [producto.demanda_media * 60 - producto.stock_inicial for producto in productos_validos]
         b_ub.append(0)
 
         result = linprog(
@@ -216,7 +228,7 @@ def main():
             for producto in productos_optimizados:
                 print(f"\nProducto {producto.cod_art} - {producto.nom_art}")
                 print(f"Demanda media: {producto.demanda_media:.2f}")
-                print(f"Stock total inicial: {producto.stock_total:.2f}")
+                print(f"Stock total inicial: {producto.stock_inicial:.2f}")
                 print(f"Cajas a producir: {producto.cajas_a_producir}")
                 print(f"Horas necesarias: {producto.horas_necesarias:.2f}")
                 print(f"Cobertura actual: {producto.cobertura_actual:.2f}")
