@@ -349,27 +349,170 @@ def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacio
         logger.error("Tipo de fecha_planificacion: %s", type(fecha_planificacion))
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
+def validar_fecha(fecha_str, nombre_campo):
+    """Valida el formato de fecha y la convierte a objeto datetime"""
+    try:
+        if not fecha_str:
+            raise ValueError(f"La {nombre_campo} no puede estar vacía")
+        
+        # Normalizar formato
+        fecha_str = fecha_str.replace("/", "-")
+        
+        # Intentar diferentes formatos
+        try:
+            fecha_dt = datetime.strptime(fecha_str, '%d-%m-%Y')
+        except ValueError:
+            try:
+                fecha_dt = datetime.strptime(fecha_str, '%d-%m-%y')
+                # Convertir a formato completo
+                fecha_str = fecha_dt.strftime('%d-%m-%Y')
+                fecha_dt = datetime.strptime(fecha_str, '%d-%m-%Y')
+            except ValueError:
+                raise ValueError(f"Formato de {nombre_campo} inválido. Use DD-MM-YYYY o DD-MM-YY")
+        
+        return fecha_dt, fecha_str
+    except Exception as e:
+        raise ValueError(f"Error validando {nombre_campo}: {str(e)}")
 
+def verificar_dataset_existe(nombre_archivo):
+    """Verifica si existe el archivo de dataset"""
+    try:
+        if not os.path.exists(nombre_archivo):
+            print(f"\n⚠️  ADVERTENCIA: No se encuentra el archivo '{nombre_archivo}'")
+            print("Verifique que el archivo existe en el directorio actual con ese nombre exacto.")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Error verificando dataset: {str(e)}")
+        return False
+
+
+def solicitar_parametros():
+    """Solicita y valida todos los parámetros de entrada"""
+    while True:
+        try:
+            # Fecha dataset
+            fecha_dataset_str = input("\nIngrese fecha de dataset (DD-MM-YYYY): ").strip()
+            fecha_dataset_dt, fecha_dataset_str = validar_fecha(fecha_dataset_str, "fecha de dataset")
+            
+            # Verificar existencia del dataset
+            if not verificar_dataset_existe(fecha_dataset_dt):
+                print("\n🔄 Por favor, ingrese una nueva fecha.")
+                continue
+            
+            # Fecha planificación
+            while True:
+                fecha_planif_str = input("\nIngrese fecha inicio planificación (DD-MM-YYYY): ").strip()
+                fecha_planif_dt, fecha_planif_str = validar_fecha(fecha_planif_str, "fecha de planificación")
+                
+                if fecha_planif_dt < fecha_dataset_dt:
+                    print("❌ La fecha de planificación debe ser posterior a la fecha del dataset")
+                else:
+                    break
+            
+            # Días de planificación
+            while True:
+                try:
+                    dias_planif = int(input("\nIngrese días de planificación: "))
+                    if dias_planif <= 0:
+                        print("❌ Los días de planificación deben ser positivos")
+                        continue
+                    break
+                except ValueError:
+                    print("❌ Por favor ingrese un número entero válido")
+            
+            # Días no hábiles
+            while True:
+                try:
+                    dias_no_habiles = float(input("\nIngrese días no hábiles en el periodo: "))
+                    if dias_no_habiles < 0 or dias_no_habiles >= dias_planif:
+                        print("❌ Los días no hábiles deben ser un número entre 0 y los días de planificación")
+                        continue
+                    break
+                except ValueError:
+                    print("❌ Por favor ingrese un número válido")
+            
+            # Horas mantenimiento
+            while True:
+                try:
+                    horas_mant = int(input("\nIngrese horas de mantenimiento: "))
+                    if horas_mant < 0:
+                        print("❌ Las horas de mantenimiento no pueden ser negativas")
+                        continue
+                    break
+                except ValueError:
+                    print("❌ Por favor ingrese un número entero válido")
+            
+            return {
+                'fecha_dataset': fecha_dataset_str,
+                'fecha_dataset_dt': fecha_dataset_dt,
+                'fecha_planificacion': fecha_planif_str,
+                'fecha_planificacion_dt': fecha_planif_dt,
+                'dias_planificacion': dias_planif,
+                'dias_no_habiles': dias_no_habiles,
+                'horas_mantenimiento': horas_mant
+            }
+                
+        except ValueError as ve:
+            print(f"\n❌ Error: {str(ve)}")
+            continuar = input("\n¿Desea intentar nuevamente? (s/n): ").strip().lower()
+            if continuar != 's':
+                print("⛔ Proceso interrumpido por el usuario.")
+                return None
+        except Exception as e:
+            logger.error(f"Error inesperado: {str(e)}")
+            return None
 def main():
     try:
         logger.info("Iniciando planificación de producción...")
         
-        # Fechas
-        fecha_dataset = input("Ingrese fecha de dataset DD-MM-YYYY: ").strip()
+        while True:
+            # Fechas
+            fecha_dataset = input("Ingrese fecha de dataset DD-MM-YYYY: ").strip()
+            
+            # Formatear la fecha para el nombre del archivo
+            try:
+                nombre_dataset = 'Dataset ' + datetime.strptime(
+                    fecha_dataset.replace("/", "-"), 
+                    "%d-%m-%Y"
+                ).strftime("%d-%m-%y") + '.csv'
+                
+                if verificar_dataset_existe(nombre_dataset):
+                    break
+                print("\n🔄 Por favor, ingrese una nueva fecha.")
+            except ValueError:
+                print("\n❌ Formato de fecha inválido. Use DD-MM-YYYY")
+                continue
+        
         fecha_planificacion = input("Ingrese fecha inicio planificación DD-MM-YYYY: ").strip()
         
-        # Formatear la fecha para el nombre del archivo
-        fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%Y')
-        fecha_planificacion_dt = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
-        nombre_dataset = 'Dataset ' + datetime.strptime(
-                fecha_dataset.replace("/", "-"), 
-                "%d-%m-%Y"
-            ).strftime("%d-%m-%y") + '.csv'
-        
+        try:
+            fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%Y')
+            fecha_planificacion_dt = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
+            
+            if fecha_planificacion_dt < fecha_dataset_dt:
+                raise ValueError("La fecha de planificación debe ser posterior a la fecha del dataset")
+        except ValueError as e:
+            logger.error(f"Error en fechas: {str(e)}")
+            return None
+            
         # Parámetros de planificación
-        dias_planificacion = int(input("Ingrese días de planificación: "))
-        dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
-        horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
+        try:
+            dias_planificacion = int(input("Ingrese días de planificación: "))
+            if dias_planificacion <= 0:
+                raise ValueError("Los días de planificación deben ser positivos")
+                
+            dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
+            if dias_no_habiles < 0 or dias_no_habiles >= dias_planificacion:
+                raise ValueError("Días no hábiles inválidos")
+                
+            horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
+            if horas_mantenimiento < 0:
+                raise ValueError("Las horas de mantenimiento no pueden ser negativas")
+        except ValueError as e:
+            logger.error(f"Error en parámetros: {str(e)}")
+            return None
+            
         dias_cobertura_base = 5
         
         # 1. Leer dataset y calcular fórmulas
@@ -400,11 +543,11 @@ def main():
         if not productos_optimizados:
             raise ValueError("Error en la optimización")
         
-        # 3. Exportar resultados - Pasar el objeto datetime
+        # 3. Exportar resultados
         exportar_resultados(
             productos_optimizados=productos_optimizados,
-            fecha_dataset=fecha_dataset_dt,  # Usar el objeto datetime
-            fecha_planificacion=fecha_planificacion_dt,  # Usar el objeto datetime
+            fecha_dataset=fecha_dataset_dt,
+            fecha_planificacion=fecha_planificacion_dt,
             dias_planificacion=dias_planificacion,
             dias_cobertura_base=dias_cobertura_base
         )
