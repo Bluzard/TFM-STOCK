@@ -44,6 +44,8 @@ class Producto:
         self.stock_seguridad = 0
         self.cajas_a_producir = 0
         self.horas_necesarias = 0
+        self.cobertura_final_est = 0
+        self.cobertura_final_plan = 0
 
     def _convertir_float(self, valor):
         if isinstance(valor, (int, float)):
@@ -314,26 +316,54 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         logger.error(f"Error en Simplex: {str(e)}")
         return None
 
-def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
+def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     try:
         datos = []
-        for producto in productos_optimizados:
-            if producto.horas_necesarias > 0:
-                cobertura_minima = dias_cobertura_base + dias_planificacion
+        productos_omitir = leer_indicaciones_articulos()
+        
+        # Obtener todos los productos activos
+        for producto in productos:
+            if producto.cod_art not in productos_omitir:
+                estado = "No válido"  # Por defecto
+                
+                # Verificar si el producto está en productos_optimizados
+                producto_opt = next((p for p in productos_optimizados if p.cod_art == producto.cod_art), None)
+                
+                if producto_opt:
+                    if producto_opt.horas_necesarias > 0:
+                        estado = "Planificado"
+                    else:
+                        estado = "Válido sin producción"
+                        
+                    # Usar valores del producto optimizado si existe
+                    producto_final = producto_opt
+                else:
+                    producto_final = producto
+                
+                # Calcular coberturas y valores finales
+                cobertura_final = producto_final.cobertura_final_plan if hasattr(producto_final, 'cobertura_final_plan') else producto_final.cobertura_final_est
+                cajas_producir = producto_final.cajas_a_producir if hasattr(producto_final, 'cajas_a_producir') else 0
+                horas_necesarias = producto_final.horas_necesarias if hasattr(producto_final, 'horas_necesarias') else 0
+                
                 datos.append({
-                    'COD_ART': producto.cod_art,
-                    'NOM_ART': producto.nom_art,
-                    'Demanda_Media': round(producto.demanda_media, 2),
-                    'Stock_Inicial': round(producto.stock_inicial, 2),
-                    'Cajas_a_Producir': producto.cajas_a_producir,
-                    'Horas_Necesarias': round(producto.horas_necesarias, 2),
-                    'Cobertura_Inicial': round(producto.cobertura_inicial, 2),
-                    'Cobertura_Final': round(producto.cobertura_final_plan, 2),
-                    'Cobertura_Final_Est': round(producto.cobertura_final_est, 2),
-                    'Desviacion': round(producto.cobertura_final_plan - dias_cobertura_base, 2)
+                    'COD_ART': producto_final.cod_art,
+                    'NOM_ART': producto_final.nom_art,
+                    'Estado': estado,
+                    'Demanda_Media': round(producto_final.demanda_media, 2) if producto_final.demanda_media != 'NO VALIDO' else 0,
+                    'Stock_Inicial': round(producto_final.stock_inicial, 2),
+                    'Cajas_a_Producir': cajas_producir,
+                    'Horas_Necesarias': round(horas_necesarias, 2),
+                    'Cobertura_Inicial': round(producto_final.cobertura_inicial, 2) if producto_final.cobertura_inicial != 'NO VALIDO' else 0,
+                    'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != 'NO VALIDO' else 0,
+                    'Cobertura_Final_Est': round(producto_final.cobertura_final_est, 2) if producto_final.cobertura_final_est != 'NO VALIDO' else 0
                 })
         
         df = pd.DataFrame(datos)
+        
+        # Ordenar el DataFrame por Estado y Cobertura_Inicial
+        df['orden_estado'] = df['Estado'].map({'Planificado': 0, 'Válido sin producción': 1, 'No válido': 2})
+        df = df.sort_values(['orden_estado', 'Cobertura_Inicial'])
+        df = df.drop('orden_estado', axis=1)
         
         # Convertir fecha_planificacion a datetime si es string
         if isinstance(fecha_planificacion, str):
@@ -341,7 +371,7 @@ def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacio
             
         nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
 
-        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',')
+        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
     except Exception as e:
@@ -518,8 +548,6 @@ def main():
             logger.error(f"Error en parámetros: {str(e)}")
             return None
             
-        
-        
         # 1. Leer dataset y calcular fórmulas
         productos = leer_dataset(nombre_dataset)
         if not productos:
@@ -551,6 +579,7 @@ def main():
         # 3. Exportar resultados
         exportar_resultados(
             productos_optimizados=productos_optimizados,
+            productos=productos,  # Agregamos todos los productos originales
             fecha_dataset=fecha_dataset_dt,
             fecha_planificacion=fecha_planificacion_dt,
             dias_planificacion=dias_planificacion,
