@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 import numpy as np
 import pandas as pd
+import os
 from scipy.optimize import linprog
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,8 +60,9 @@ class Producto:
 
 def leer_dataset(nombre_archivo):
     try:
+        ruta_completa = os.path.join(nombre_archivo)
         productos = []
-        with open(nombre_archivo, 'r', encoding='latin1') as file:
+        with open(ruta_completa, 'r', encoding='latin1') as file:
             for _ in range(5):
                 next(file)
             
@@ -134,8 +136,22 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         # 1. Cálculo de Horas Disponibles
         horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
         
-        productos_omitir = leer_indicaciones_articulos()
+        productos_omitir = leer_indicaciones_articulos()        
         productos_validos = []
+
+        # Convertir fechas usando el formato correcto
+        try:
+            fecha_inicio_dt = datetime.strptime(fecha_inicio, '%d-%m-%Y')
+            # Convertir fecha_dataset a formato completo YYYY
+            if len(fecha_dataset.split('-')[2]) == 2:  # Si el año tiene 2 dígitos
+                fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%y')
+            else:  # Si el año tiene 4 dígitos
+                fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%Y')
+            
+            logger.info(f"Fecha inicio: {fecha_inicio_dt}, Fecha dataset: {fecha_dataset_dt}")
+        except ValueError as e:
+            logger.error(f"Error en formato de fechas: {str(e)}")
+            return None, None
         
         for producto in productos:
             # 2. Cálculo de demanda media
@@ -149,18 +165,17 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
                 producto.demanda_media = producto.m_vta_15
 
             # 3. Demanda provisoria
-            dias_diff = (fecha_inicio - fecha_dataset).days
+            dias_diff = (fecha_inicio_dt - fecha_dataset_dt).days
             producto.demanda_provisoria = producto.demanda_media * dias_diff
-
             # 4. Actualizar Disponible
             if producto.primera_of != '(en blanco)':
                 of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
-                if of_date >= fecha_dataset and of_date < fecha_inicio:
-                    producto.disponible = producto.disponible + producto.of
+                if of_date >= fecha_dataset_dt and of_date < fecha_inicio_dt:
+                        producto.disponible = producto.disponible + producto.of
             
             # 5. Stock Inicial
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
-            
+
             ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
             ## ----------------- CORREGIR PLANIFICACION (ADELANTAR PLANIFICACION)----------------- ##
             
@@ -304,26 +319,41 @@ def exportar_resultados(productos_optimizados, fecha_planificacion, dias_planifi
                 })
         
         df = pd.DataFrame(datos)
+        
+        # Convertir fecha_planificacion a datetime si es string
+        if isinstance(fecha_planificacion, str):
+            fecha_planificacion = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
+            
         nombre_archivo = f"planificacion_{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
         df.to_csv(nombre_archivo, index=False, sep=';', decimal=',')
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
     except Exception as e:
         logger.error(f"Error exportando resultados: {str(e)}")
+        logger.error("Tipo de fecha_planificacion: %s", type(fecha_planificacion))
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
 
 def main():
     try:
         logger.info("Iniciando planificación de producción...")
         
         # Fechas
-        fecha_dataset = datetime.strptime('16-01-2025', '%d-%m-%Y')
-        fecha_planificacion = datetime.strptime('20-01-2025', '%d-%m-%Y')
-        nombre_dataset = 'Dataset 16-01-25.csv'
+        fecha_dataset = input("Ingrese fecha de dataset DD-MM-YYYY: ").strip()
+        fecha_planificacion = input("Ingrese fecha inicio planificación DD-MM-YYYY: ").strip()
+        
+        # Formatear la fecha para el nombre del archivo
+        fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%Y')
+        fecha_planificacion_dt = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
+        nombre_dataset = 'Dataset ' + datetime.strptime(
+                fecha_dataset.replace("/", "-"), 
+                "%d-%m-%Y"
+            ).strftime("%d-%m-%y") + '.csv'
         
         # Parámetros de planificación
-        dias_planificacion = 6
-        dias_no_habiles = 1.6667
-        horas_mantenimiento = 9
+        dias_planificacion = int(input("Ingrese días de planificación: "))
+        dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
+        horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
         dias_cobertura_base = 5
         
         # 1. Leer dataset y calcular fórmulas
@@ -354,10 +384,10 @@ def main():
         if not productos_optimizados:
             raise ValueError("Error en la optimización")
         
-        # 3. Exportar resultados
+        # 3. Exportar resultados - Pasar el objeto datetime
         exportar_resultados(
             productos_optimizados=productos_optimizados,
-            fecha_planificacion=fecha_planificacion,
+            fecha_planificacion=fecha_planificacion_dt,  # Usar el objeto datetime
             dias_planificacion=dias_planificacion,
             dias_cobertura_base=dias_cobertura_base
         )
