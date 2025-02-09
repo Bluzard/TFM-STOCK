@@ -1,0 +1,133 @@
+def simplex(self, df, horas_disponibles, dias_planificacion):
+    try:
+        # 1. Preprocesamiento inicial
+        df_work = df.copy()
+        
+        # Filtrar productos con demanda válida
+        df_work = df_work[
+            (df_work['Vta -60'] > self.DEMANDA_60D_MIN) &
+            (df_work['demanda_media'] > 0)
+        ].copy()
+        
+        if df_work.empty:
+            logger.info("No hay productos con demanda válida")
+            return None
+
+        # 2. Cálculo de parámetros clave
+        df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
+        df_work['stock_minimo'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+        df_work['stock_maximo'] = (df_work['demanda_media'] * self.COBERTURA_MAX).round(0)
+        df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
+        df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo']) / 
+                                        df_work['demanda_media']).round(1)
+        
+        # 3. Filtrar productos que necesitan producción
+        df_work = df_work[df_work['cobertura_inicial'] < self.COBERTURA_MAX]
+        logger.info(f"Productos en optimización: {len(df_work)}")
+        
+        if df_work.empty:
+            logger.info("No hay productos que requieran producción")
+            return None
+
+        # 4. Calcular límites de producción
+        min_produccion = np.maximum(
+            0,
+            df_work['stock_minimo'] - (df_work['stock_inicial'] - df_work['demanda_periodo'])
+        )
+        max_produccion = df_work['stock_maximo'] - (df_work['stock_inicial'] - df_work['demanda_periodo'])
+        
+        # Convertir a horas
+        lower_bounds = (min_produccion / df_work['Cj/H']).values
+        upper_bounds = (max_produccion / df_work['Cj/H']).values
+        upper_bounds = np.maximum(upper_bounds, 0)
+
+        # 5. Nueva condición: Mínimo 2 horas o cero
+        mask = lower_bounds < 2
+        lower_bounds[mask] = 0
+        upper_bounds[mask] = 0  # Fuerza producción cero si no alcanza 2 horas
+        
+        # 6. Verificar límites válidos
+        valid_bounds = upper_bounds >= lower_bounds
+        if not np.all(valid_bounds):
+            invalid_indices = np.where(~valid_bounds)[0]
+            invalid_products = df_work.iloc[invalid_indices][['COD_ART', 'stock_minimo', 'stock_maximo']]
+            logger.error(f"Límites inválidos:\n{invalid_products.to_string()}")
+            return None
+
+        n = len(df_work)
+        
+        # 7. Configurar variables de desviación
+        c = np.concatenate([np.zeros(n), np.ones(n), np.ones(n)])  # [x, u, v]
+
+        # 8. Restricción de horas totales
+        A_eq_horas = np.zeros((1, 3*n))
+        A_eq_horas[0, :n] = 1  # Suma de x_i
+        b_eq_horas = [horas_disponibles]
+
+        # 9. Restricciones de desviación
+        A_eq_dev = np.zeros((n, 3*n))
+        for i in range(n):
+            A_eq_dev[i, i] = df_work.iloc[i]['Cj/H'] / df_work.iloc[i]['demanda_media']
+            A_eq_dev[i, n + i] = -1  # -u_i
+            A_eq_dev[i, 2*n + i] = 1  # +v_i
+        b_eq_dev = self.COBERTURA_MIN - (df_work['stock_inicial'] - df_work['demanda_periodo']) / df_work['demanda_media']
+        b_eq_dev = b_eq_dev.values
+
+        # 10. Combinar restricciones
+        A_eq = np.vstack([A_eq_horas, A_eq_dev])
+        b_eq = np.concatenate([b_eq_horas, b_eq_dev])
+
+        # 11. Restricciones de límites
+        A_ub = np.zeros((2*n, 3*n))
+        A_ub[:n, :n] = -np.eye(n)  # x_i >= lower_bounds
+        A_ub[n:2*n, :n] = np.eye(n)  # x_i <= upper_bounds
+        b_ub = np.concatenate([-lower_bounds, upper_bounds])
+
+        # 12. Límites de variables
+        bounds = [(0, None)]*n + [(0, None)]*n + [(0, None)]*n
+
+        # 13. Resolver
+        result = linprog(
+            c,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            bounds=bounds,
+            method='highs',
+            options={'presolve': True, 'time_limit': 30}
+        )
+
+        if not result.success:
+            logger.error(f"Error del solver: {result.message}")
+            return None
+
+        # 14. Procesar solución
+        x = result.x[:n]
+        df_work['horas_necesarias'] = x
+        df_work['cajas_a_producir'] = x * df_work['Cj/H'].values
+        
+        # 15. Forzar producción cero donde horas < 2 (por posibles errores de redondeo)
+        df_work.loc[df_work['horas_necesarias'] < 2, 'cajas_a_producir'] = 0
+        df_work.loc[df_work['horas_necesarias'] < 2, 'horas_necesarias'] = 0
+        
+        df_work['stock_final'] = df_work['stock_inicial'] - df_work['demanda_periodo'] + df_work['cajas_a_producir']
+        df_work['cobertura_final'] = (df_work['stock_final'] / df_work['demanda_media']).round(1)
+        df_work['desviacion'] = (df_work['cobertura_final'] - self.COBERTURA_MIN).abs()
+
+        # 16. Validaciones finales
+        total_horas = df_work['horas_necesarias'].sum()
+        if not np.isclose(total_horas, horas_disponibles, atol=1e-3):
+            logger.error(f"Discrepancia en horas: {total_horas:.2f} vs {horas_disponibles}")
+            return None
+
+        logger.info(f"Horas usadas: {total_horas:.2f}/{horas_disponibles}")
+        logger.info(f"Productos excluidos por <2 horas: {sum(mask)}")
+        logger.info(f"Desviación total: {df_work['desviacion'].sum():.2f}")
+        logger.debug(df_work[['COD_ART', 'horas_necesarias', 'cobertura_final', 'desviacion']].to_string())
+
+        return df_work['cajas_a_producir']
+
+    except Exception as e:
+        logger.error(f"Error crítico: {str(e)}", exc_info=True)
+        return None

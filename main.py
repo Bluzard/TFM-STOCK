@@ -11,14 +11,15 @@ logger = logging.getLogger(__name__)
 class PlanificadorProduccion:
     def __init__(self):
        ## Parámetros base para la planificación
-        self.COBERTURA_MIN = 3  # Cobertura stock de seguridad mínima (días)
+        self.COBERTURA_MIN = 20  # Cobertura stock de seguridad mínima (días)
         self.COBERTURA_MAX = 60  # Máxima cobertura de stock permitida (días)
         self.DEMANDA_60D_MIN = 0  # Umbral mínimo de ventas en 60 días (Cj)
         self.TASA_PRODUCCION_MIN = 0  # Tasa mínima de producción (Cj/h)
         self.UMBRAL_VARIACION = 0.20  # Umbral de variación para ajuste de demanda (%)
 
-    def simplex(self, df, horas_disponibles, dias_planificacion, dias_no_habiles):
+    def simplex(self, df, horas_disponibles, dias_planificacion):
         try:
+            # 1. Preprocesamiento inicial
             df_work = df.copy()
             
             # Filtrar productos con demanda válida
@@ -27,82 +28,129 @@ class PlanificadorProduccion:
                 (df_work['demanda_media'] > 0)
             ].copy()
             
-            # Calcular días hábiles y demanda del periodo
-            dias_habiles = dias_planificacion - dias_no_habiles
-            
-            # Calcular cobertura inicial y stock de seguridad
+            if df_work.empty:
+                logger.info("No hay productos con demanda válida")
+                return None
+
+            # 2. Cálculo de parámetros clave
             df_work['demanda_periodo'] = (df_work['demanda_media'] * dias_planificacion).round(0)
-            df_work['stock_seguridad'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+            df_work['stock_minimo'] = (df_work['demanda_media'] * self.COBERTURA_MIN).round(0)
+            df_work['stock_maximo'] = (df_work['demanda_media'] * self.COBERTURA_MAX).round(0)
             df_work['cobertura_inicial'] = (df_work['stock_inicial'] / df_work['demanda_media']).round(1)
-            df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo'])/ df_work['demanda_media']).round(1)
+            df_work['cobertura_final_est'] = ((df_work['stock_inicial'] - df_work['demanda_periodo']) / 
+                                            df_work['demanda_media']).round(1)
             
-            # Filtrar productos que necesitan producción
+            # 3. Filtrar productos que necesitan producción
             df_work = df_work[df_work['cobertura_inicial'] < self.COBERTURA_MAX]
-            logger.info(f"Lista entrada al Simplex con {len(df_work)} filas:\n{df_work[['COD_ART', 'stock_inicial', 'demanda_media', 'Cj/H','cobertura_inicial']]}")
+            logger.info(f"Productos en optimización: {len(df_work)}")
             
             if df_work.empty:
                 logger.info("No hay productos que requieran producción")
                 return None
-                
-            n_productos = len(df_work)
+
+            # 4. Calcular límites de producción
+            min_produccion = np.maximum(
+                0,
+                df_work['stock_minimo'] - (df_work['stock_inicial'] - df_work['demanda_periodo'])
+            )
+            max_produccion = df_work['stock_maximo'] - (df_work['stock_inicial'] - df_work['demanda_periodo'])
             
-            # Función objetivo: minimizar horas totales de producción
-            c = 1/df_work['Cj/H'].values  # Coeficiente es horas por unidad producida
+            # Convertir a horas
+            lower_bounds = (min_produccion / df_work['Cj/H']).values
+            upper_bounds = (max_produccion / df_work['Cj/H']).values
+            upper_bounds = np.maximum(upper_bounds, 0)
+
+            # 5. Nueva condición: Mínimo 2 horas o cero
+            mask = lower_bounds < 2
+            lower_bounds[mask] = 0
+            upper_bounds[mask] = 0  # Fuerza producción cero si no alcanza 2 horas
             
-            # 1. Restricción de cobertura mínima de 3 días
-            A_cob = np.zeros((n_productos, n_productos))
-            for i in range(n_productos):
-                # Consideramos la demanda del periodo total para calcular cobertura
-                A_cob[i, i] = 1/df_work['demanda_media'].iloc[i]
-            b_cob = 3 - df_work['stock_inicial'].values/df_work['demanda_media'].values
+            # 6. Verificar límites válidos
+            valid_bounds = upper_bounds >= lower_bounds
+            if not np.all(valid_bounds):
+                invalid_indices = np.where(~valid_bounds)[0]
+                invalid_products = df_work.iloc[invalid_indices][['COD_ART', 'stock_minimo', 'stock_maximo']]
+                logger.error(f"Límites inválidos:\n{invalid_products.to_string()}")
+                return None
+
+            n = len(df_work)
             
-            # 2. Restricción de horas disponibles (solo en días hábiles)
-            A_horas = np.zeros((1, n_productos))
-            A_horas[0] = 1/df_work['Cj/H'].values
-            b_horas = [horas_disponibles]  # horas_disponibles ya viene calculado con días hábiles
-            
-            # 3. Restricción de horas mínimas por producto (2 horas)
-            A_min_horas = np.zeros((n_productos, n_productos))
-            for i in range(n_productos):
-                A_min_horas[i, i] = -1/df_work['Cj/H'].iloc[i]
-            b_min_horas = np.full(n_productos, -2)  # Mínimo 2 horas
-            
-            # Combinar todas las restricciones
-            A = np.vstack([-A_cob, A_horas, A_min_horas])
-            b = np.concatenate([-b_cob, b_horas, b_min_horas])
-            
-            # Resolver con Simplex
+            # 7. Configurar variables de desviación
+            c = np.concatenate([np.zeros(n), np.ones(n), np.ones(n)])  # [x, u, v]
+
+            # 8. Restricción de horas totales
+            A_eq_horas = np.zeros((1, 3*n))
+            A_eq_horas[0, :n] = 1  # Suma de x_i
+            b_eq_horas = [horas_disponibles]
+
+            # 9. Restricciones de desviación
+            A_eq_dev = np.zeros((n, 3*n))
+            for i in range(n):
+                A_eq_dev[i, i] = df_work.iloc[i]['Cj/H'] / df_work.iloc[i]['demanda_media']
+                A_eq_dev[i, n + i] = -1  # -u_i
+                A_eq_dev[i, 2*n + i] = 1  # +v_i
+            b_eq_dev = self.COBERTURA_MIN - (df_work['stock_inicial'] - df_work['demanda_periodo']) / df_work['demanda_media']
+            b_eq_dev = b_eq_dev.values
+
+            # 10. Combinar restricciones
+            A_eq = np.vstack([A_eq_horas, A_eq_dev])
+            b_eq = np.concatenate([b_eq_horas, b_eq_dev])
+
+            # 11. Restricciones de límites
+            A_ub = np.zeros((2*n, 3*n))
+            A_ub[:n, :n] = -np.eye(n)  # x_i >= lower_bounds
+            A_ub[n:2*n, :n] = np.eye(n)  # x_i <= upper_bounds
+            b_ub = np.concatenate([-lower_bounds, upper_bounds])
+
+            # 12. Límites de variables
+            bounds = [(0, None)]*n + [(0, None)]*n + [(0, None)]*n
+
+            # 13. Resolver
             result = linprog(
                 c,
-                A_ub=A, 
-                b_ub=b,
-                method='highs'
+                A_eq=A_eq,
+                b_eq=b_eq,
+                A_ub=A_ub,
+                b_ub=b_ub,
+                bounds=bounds,
+                method='highs',
+                options={'presolve': True, 'time_limit': 30}
             )
-            
+
             if not result.success:
-                logger.error(f"No se encontró solución óptima: {result.message}")
+                logger.error(f"Error del solver: {result.message}")
                 return None
-                
-            # Extraer las cantidades a producir
-            produccion_optima = pd.Series(np.round(result.x, 0), index=df_work.index)
+
+            # 14. Procesar solución
+            x = result.x[:n]
+            df_work['horas_necesarias'] = x
+            df_work['cajas_a_producir'] = x * df_work['Cj/H'].values
             
-            # Calcular y loguear métricas
-            horas_por_producto = produccion_optima / df_work['Cj/H']
-            cobertura_final = (df_work['stock_inicial'] + produccion_optima) / df_work['demanda_media']
+            # 15. Forzar producción cero donde horas < 2 (por posibles errores de redondeo)
+            df_work.loc[df_work['horas_necesarias'] < 2, 'cajas_a_producir'] = 0
+            df_work.loc[df_work['horas_necesarias'] < 2, 'horas_necesarias'] = 0
             
-            logger.info(f"Métricas de la solución (considerando {dias_habiles} días hábiles de {dias_planificacion} días totales):")
-            logger.info(f"Horas totales necesarias: {horas_por_producto.sum():.2f}")
-            logger.info(f"Horas restantes: {horas_disponibles - horas_por_producto.sum():.2f}")
-            logger.info("\nCobertura por producto:")
-            for idx in df_work.index:
-                logger.info(f"Producto {df_work.loc[idx, 'COD_ART']}: {cobertura_final[idx]:.1f} días")
-            
-            return produccion_optima
-            
+            df_work['stock_final'] = df_work['stock_inicial'] - df_work['demanda_periodo'] + df_work['cajas_a_producir']
+            df_work['cobertura_final'] = (df_work['stock_final'] / df_work['demanda_media']).round(1)
+            df_work['desviacion'] = (df_work['cobertura_final'] - self.COBERTURA_MIN).abs()
+
+            # 16. Validaciones finales
+            total_horas = df_work['horas_necesarias'].sum()
+            if not np.isclose(total_horas, horas_disponibles, atol=1e-3):
+                logger.error(f"Discrepancia en horas: {total_horas:.2f} vs {horas_disponibles}")
+                return None
+
+            logger.info(f"Horas usadas: {total_horas:.2f}/{horas_disponibles}")
+            logger.info(f"Productos excluidos por <2 horas: {sum(mask)}")
+            logger.info(f"Desviación total: {df_work['desviacion'].sum():.2f}")
+            logger.debug(df_work[['COD_ART', 'horas_necesarias', 'cobertura_final', 'desviacion']].to_string())
+
+            return df_work
+
         except Exception as e:
-            logger.error(f"Error en optimización Simplex: {str(e)}")
-            logger.error("Traza completa:", exc_info=True)
+            logger.error(f"Error crítico: {str(e)}", exc_info=True)
             return None
+
 
     def aplicar_filtros(self, df):
         # Filtros para selección de productos
@@ -221,10 +269,9 @@ class PlanificadorProduccion:
             logger.error(f"Error cargando datos: {str(e)}")
             return None
 
-    def generar_plan_produccion(self, df, horas_disponibles, dias_planificacion, dias_no_habiles, fecha_inicio=None, usar_simplex=False):
+    def generar_plan_produccion(self, df, horas_disponibles, dias_planificacion, fecha_inicio=None):
         try:
             logger.info("=== Iniciando generación de plan ===")
-            #logger.info(f"{'Usando Simplex' if usar_simplex else 'Usando método propio'}")
             logger.info(f"Columnas disponibles: {df.columns.tolist()}")
             logger.info(f"Datos iniciales:\n{df[['COD_ART', 'Disponible','stock_inicial', 'demanda_media', 'Cj/H','1ª OF', 'OF']]}")
             
@@ -234,10 +281,9 @@ class PlanificadorProduccion:
             plan = df.copy()
             # Generar producción óptima
             produccion_optima = (
-                self.simplex(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
+                self.simplex(plan, horas_disponibles, dias_planificacion)
                 )
-                #if usar_simplex else
-                #self.optimizar_produccion(plan, horas_disponibles, dias_planificacion, dias_no_habiles)
+
             
             
             # Validar producción óptima
@@ -253,8 +299,9 @@ class PlanificadorProduccion:
             plan.loc[produccion_optima.index, 'cajas_a_producir'] = produccion_optima
             plan['horas_necesarias'] = (plan['cajas_a_producir'] / plan['Cj/H']).round(1)
             
+            
             # Filtrar productos con producción
-            plan = plan[plan['cajas_a_producir'] > 0].copy()
+            #plan = plan[plan['cajas_a_producir'] > 0].copy()
             
             if plan.empty:
                 logger.warning("Plan está vacío después de filtrar cajas a producir")
@@ -280,13 +327,13 @@ class PlanificadorProduccion:
             print(f"Total horas: {plan['horas_necesarias'].sum():.1f}")
             print("\nDetalle por producto:")
             
-            columnas = ['COD_ART', 'NOM_ART', 'Disponible_Inicial', 'Calidad', 'Stock Externo', 
+            columnas = ['COD_ART', 'NOM_ART', 'cobertura_inicial','cobertura_final_est',
                        'stock_inicial', 'demanda_media', 'cajas_a_producir', 'horas_necesarias']
-            print(plan[columnas].to_string(index=False))
+            #print(plan.to_string(index=False))
             
             # Guardar reporte en archivo CSV
             ruta_reporte = f"plan_produccion_{fecha_inicio.strftime('%Y%m%d')}_{fecha_fin.strftime('%Y%m%d')}.csv"
-            plan[columnas].to_csv(ruta_reporte, index=False)
+            plan.to_csv(ruta_reporte, index=False)
             logger.info(f"Reporte guardado en {ruta_reporte}")
             
         except Exception as e:
@@ -300,7 +347,7 @@ def main():
         dias_planificacion = int(input("Ingrese días de planificación: "))
         dias_no_habiles = float(input("Ingrese días no hábiles en el periodo: "))
         horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
-        usar_simplex = input("¿Usar método Simplex? (s/n): ").strip().lower() == 's'
+
         
         # Validaciones de entrada
         if dias_planificacion <= 0:
@@ -331,15 +378,19 @@ def main():
             
         logger.info(f"Datos cargados y filtrados: {len(df)} productos")
         
+        # Calcular cobertura inicial y stock de seguridad
+        df['demanda_periodo'] = (df['demanda_media'] * dias_planificacion).round(0)
+        df['stock_seguridad'] = (df['demanda_media'] * 3).round(0)
+        df['cobertura_inicial'] = (df['stock_inicial'] / df['demanda_media']).round(1)
+        df['cobertura_final_est'] = ((df['stock_inicial'] - df['demanda_periodo'])/ df['demanda_media']).round(1)
+        
         # Generar plan de producción
         logger.info("Generando plan de producción...")
         plan, fecha_inicio_dt, fecha_fin = planificador.generar_plan_produccion(
             df, 
             horas_disponibles,
             dias_planificacion,
-            dias_no_habiles,
-            fecha_inicio,
-            usar_simplex
+            fecha_inicio
         )
         
         if plan is None:
