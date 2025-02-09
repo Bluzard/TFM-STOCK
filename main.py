@@ -177,7 +177,22 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
 
             ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
-            ## ----------------- CORREGIR PLANIFICACION (ADELANTAR PLANIFICACION)----------------- ##
+            # Verificar si el stock inicial es negativo
+            if producto.stock_inicial < 0:
+                print("\n⚠️  ALERTA: STOCK INICIAL NEGATIVO ⚠️")
+                print("El stock inicial del producto es menor a 0.")
+                print("🔹 Se recomienda adelantar la planificación para evitar problemas.\n")
+                
+                # Preguntar al usuario si desea continuar
+                respuesta = input("¿Desea continuar de todos modos? (s/n): ").strip().lower()
+
+                if respuesta != 's':
+                    print("⛔ Proceso interrumpido por el usuario.")
+                    exit()  # Detiene la ejecución del programa
+
+                # El código continúa normalmente si el usuario elige 's'
+                print("✅ Continuando con la ejecución...")
+
             
             if producto.stock_inicial < 0:
                 producto.stock_inicial = 0
@@ -299,7 +314,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         logger.error(f"Error en Simplex: {str(e)}")
         return None
 
-def exportar_resultados(productos_optimizados, fecha_planificacion, dias_planificacion, dias_cobertura_base):
+def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     try:
         datos = []
         for producto in productos_optimizados:
@@ -324,7 +339,8 @@ def exportar_resultados(productos_optimizados, fecha_planificacion, dias_planifi
         if isinstance(fecha_planificacion, str):
             fecha_planificacion = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
             
-        nombre_archivo = f"planificacion_{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
+        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}.csv"
+
         df.to_csv(nombre_archivo, index=False, sep=';', decimal=',')
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
@@ -387,6 +403,7 @@ def main():
         # 3. Exportar resultados - Pasar el objeto datetime
         exportar_resultados(
             productos_optimizados=productos_optimizados,
+            fecha_dataset=fecha_dataset_dt,  # Usar el objeto datetime
             fecha_planificacion=fecha_planificacion_dt,  # Usar el objeto datetime
             dias_planificacion=dias_planificacion,
             dias_cobertura_base=dias_cobertura_base
