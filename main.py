@@ -62,7 +62,7 @@ class Producto:
 
 def leer_dataset(nombre_archivo):
     try:
-        ruta_completa = os.path.join(nombre_archivo)
+        ruta_completa = os.path.join('Dataset', nombre_archivo)
         productos = []
         with open(ruta_completa, 'r', encoding='latin1') as file:
             for _ in range(5):
