@@ -212,7 +212,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
 
             # 9. Cobertura Final Estimada
             if producto.demanda_media > 0:
-                 producto.cobertura_final_est = (producto.stock_inicial - producto.demanda_periodo) / producto.demanda_media
+                producto.cobertura_final_est = (producto.stock_inicial - producto.demanda_periodo) / producto.demanda_media
             else:
                 producto.cobertura_final_est = 'NO VALIDO'
 
@@ -224,7 +224,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
                 producto.cobertura_inicial != 'NO VALIDO' and 
                 producto.cobertura_final_est != 'NO VALIDO'):
                 productos_validos.append(producto)
-                    
+
         logger.info(f"Productos válidos tras filtros: {len(productos_validos)} de {len(productos)}")
         return productos_validos, horas_disponibles
         
@@ -330,7 +330,7 @@ def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacio
                     'Cobertura_Inicial': round(producto.cobertura_inicial, 2),
                     'Cobertura_Final': round(producto.cobertura_final_plan, 2),
                     'Cobertura_Final_Est': round(producto.cobertura_final_est, 2),
-                    'Desviacion': round(producto.cobertura_final_plan - cobertura_minima, 2)
+                    'Desviacion': round(producto.cobertura_final_plan - dias_cobertura_base, 2)
                 })
         
         df = pd.DataFrame(datos)
@@ -339,7 +339,7 @@ def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacio
         if isinstance(fecha_planificacion, str):
             fecha_planificacion = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
             
-        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}.csv"
+        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
 
         df.to_csv(nombre_archivo, index=False, sep=';', decimal=',')
         logger.info(f"Resultados exportados a {nombre_archivo}")
@@ -349,6 +349,7 @@ def exportar_resultados(productos_optimizados, fecha_dataset, fecha_planificacio
         logger.error("Tipo de fecha_planificacion: %s", type(fecha_planificacion))
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
+
 def validar_fecha(fecha_str, nombre_campo):
     """Valida el formato de fecha y la convierte a objeto datetime"""
     try:
@@ -509,11 +510,15 @@ def main():
             horas_mantenimiento = int(input("Ingrese horas de mantenimiento: "))
             if horas_mantenimiento < 0:
                 raise ValueError("Las horas de mantenimiento no pueden ser negativas")
+            
+            dias_cobertura_base = int(input("Ingrese días de cobertura tras planificación: "))
+            if dias_cobertura_base <= 0:
+                raise ValueError("Los días de cobertura deben ser positivos")
         except ValueError as e:
             logger.error(f"Error en parámetros: {str(e)}")
             return None
             
-        dias_cobertura_base = 5
+        
         
         # 1. Leer dataset y calcular fórmulas
         productos = leer_dataset(nombre_dataset)
