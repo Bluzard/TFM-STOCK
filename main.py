@@ -62,7 +62,23 @@ class Producto:
 
 def leer_dataset(nombre_archivo):
     try:
-        ruta_completa = os.path.join('Dataset', nombre_archivo)
+        
+        carpeta="Dataset"
+                # Encontrar archivo correspondiente
+        archivo = next(
+            (f for f in os.listdir(carpeta) 
+                if f.endswith('.csv') and nombre_archivo in f),
+            None
+        )
+        
+        if not archivo:
+            raise FileNotFoundError(
+                f"No se encontró archivo para fecha: {nombre_archivo}"
+            )
+        
+        ruta_completa = os.path.join(carpeta, archivo)
+             
+               
         productos = []
         with open(ruta_completa, 'r', encoding='latin1') as file:
             for _ in range(5):
@@ -407,6 +423,8 @@ def validar_fecha(fecha_str, nombre_campo):
 
 def verificar_dataset_existe(nombre_archivo):
     """Verifica si existe el archivo de dataset"""
+    return True
+    """
     try:
         if not os.path.exists(nombre_archivo):
             print(f"\n⚠️  ADVERTENCIA: No se encuentra el archivo '{nombre_archivo}'")
@@ -416,6 +434,7 @@ def verificar_dataset_existe(nombre_archivo):
     except Exception as e:
         logger.error(f"Error verificando dataset: {str(e)}")
         return False
+    """
 
 
 def solicitar_parametros():
@@ -503,7 +522,7 @@ def main():
             
             # Formatear la fecha para el nombre del archivo
             try:
-                nombre_dataset = 'Dataset ' + datetime.strptime(
+                nombre_dataset = datetime.strptime(
                     fecha_dataset.replace("/", "-"), 
                     "%d-%m-%Y"
                 ).strftime("%d-%m-%y") + '.csv'
