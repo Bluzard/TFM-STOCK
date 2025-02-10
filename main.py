@@ -256,18 +256,14 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         n_productos = len(productos_validos)
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
-        # Función objetivo - Ajustada para manejar coberturas de 0
+        # Función objetivo
         coeficientes = []
         for producto in productos_validos:
             if producto.demanda_media > 0:
-                # Si la cobertura es 0, asignamos la máxima prioridad
-                if producto.cobertura_inicial == 0:
-                    prioridad = 1000  # Valor alto para máxima prioridad
-                else:
-                    prioridad = max(0, 1/producto.cobertura_inicial)
+                prioridad = max(0, 1/producto.cobertura_inicial)
             else:
                 prioridad = 0
-            coeficientes.append(-prioridad)  # Negativo porque minimizamos
+            coeficientes.append(-prioridad)
 
         # Restricciones
         A_eq = np.zeros((1, n_productos))
@@ -287,15 +283,11 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         A_ub = np.array(A_ub)
         b_ub = np.array(b_ub)
 
-        # Bounds - Ajustados para considerar stock inicial 0
+        # Bounds
         bounds = []
         for producto in productos_validos:
             if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
                 min_cajas = 2 * producto.cajas_hora
-                # Si el stock inicial es 0, priorizamos producción mínima
-                if producto.stock_inicial == 0:
-                    min_cajas = max(min_cajas, producto.demanda_media * 3)  # Mínimo 3 días de cobertura
-                
                 max_cajas = min(
                     horas_disponibles * producto.cajas_hora,
                     producto.demanda_media * 60 - producto.stock_inicial
