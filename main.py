@@ -368,14 +368,18 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                 datos.append({
                     'COD_ART': producto_final.cod_art,
                     'NOM_ART': producto_final.nom_art,
+                    'COD_GRU' : producto.cod_gru,
                     'Estado': estado,
-                    'Demanda_Media': round(producto_final.demanda_media, 2) if producto_final.demanda_media != 'NO VALIDO' else 0,
+                    'Demanda_Media': round(producto_final.demanda_media, 2) if producto_final.demanda_media != 'NO VALIDO' else 999,
                     'Stock_Inicial': round(producto_final.stock_inicial, 2),
                     'Cajas_a_Producir': cajas_producir,
                     'Horas_Necesarias': round(horas_necesarias, 2),
-                    'Cobertura_Inicial': round(producto_final.cobertura_inicial, 2) if producto_final.cobertura_inicial != 'NO VALIDO' else 0,
-                    'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != 'NO VALIDO' else 0,
-                    'Cobertura_Final_Est': round(producto_final.cobertura_final_est, 2) if producto_final.cobertura_final_est != 'NO VALIDO' else 0
+                    'Cobertura_Inicial': round(producto_final.cobertura_inicial, 2) if producto_final.cobertura_inicial != 'NO VALIDO' else 999,
+                    'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != 'NO VALIDO' else 999,
+                    'Stock_final': round(cobertura_final*producto.cajas_hora, 2) if cobertura_final != 'NO VALIDO' else 999,
+                    'Cajas Hora' : round(producto.cajas_hora),
+                    'Cobertura_Final_Est': round(producto_final.cobertura_final_est, 2) if producto_final.cobertura_final_est != 'NO VALIDO' else 999,
+                    'Desviación': round(cobertura_final - dias_cobertura_base, 0) if cobertura_final != 'NO VALIDO' else 999,
                 })
         
         df = pd.DataFrame(datos)
