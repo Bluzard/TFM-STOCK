@@ -256,20 +256,24 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         n_productos = len(productos_validos)
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
-        # Función objetivo
+        # Sustituyo los productos con coberturas menores a 1 día
         coeficientes = []
+
         for producto in productos_validos:
             if producto.demanda_media > 0:
-                prioridad = max(0, 1/producto.cobertura_inicial)
+                cobertura_tmp = max(0.5, producto.cobertura_inicial)
+                prioridad = max(0, 1 / cobertura_tmp)
             else:
                 prioridad = 0
             coeficientes.append(-prioridad)
 
         # Restricciones
+        # Restricción 1: Utilizar todas las horas disponibles del período a planificar
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
+        # Restricción 2: 
         A_ub = []
         b_ub = []
         for i, producto in enumerate(productos_validos):
