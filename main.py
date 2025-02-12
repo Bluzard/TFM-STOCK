@@ -323,7 +323,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
-                        producto.stock_inicial + producto.cajas_a_producir
+                        producto.stock_inicial + producto.cajas_a_producir - producto.demanda_periodo
                     ) / producto.demanda_media
             
             logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
@@ -580,6 +580,7 @@ def main():
         if not productos:
             raise ValueError("Error al leer el dataset")
         
+
         productos_validos, horas_disponibles = calcular_formulas(
             productos=productos,
             fecha_inicio=fecha_planificacion,
@@ -592,27 +593,58 @@ def main():
         if not productos_validos:
             raise ValueError("Error en los cálculos")
         
-        # 2. Aplicar Simplex
-        productos_optimizados = aplicar_simplex(
-            productos_validos=productos_validos,
-            horas_disponibles=horas_disponibles,
-            dias_planificacion=dias_planificacion,
-            dias_cobertura_base=dias_cobertura_base
-        )
-        
-        if not productos_optimizados:
-            raise ValueError("Error en la optimización")
-        
-        # 3. Exportar resultados
-        exportar_resultados(
-            productos_optimizados=productos_optimizados,
-            productos=productos,  # Agregamos todos los productos originales
-            fecha_dataset=fecha_dataset_dt,
-            fecha_planificacion=fecha_planificacion_dt,
-            dias_planificacion=dias_planificacion,
-            dias_cobertura_base=dias_cobertura_base
-        )
-        
+        """
+            # 2. Aplicar Simplex
+            productos_optimizados = aplicar_simplex(
+                productos_validos=productos_validos,
+                horas_disponibles=horas_disponibles,
+                dias_planificacion=dias_planificacion,
+                dias_cobertura_base=dias_cobertura_base
+            )
+            
+            if not productos_optimizados:
+                raise ValueError("Error en la optimización")
+            
+            # 3. Exportar resultados
+            exportar_resultados(
+                productos_optimizados=productos_optimizados,
+                productos=productos,  # Agregamos todos los productos originales
+                fecha_dataset=fecha_dataset_dt,
+                fecha_planificacion=fecha_planificacion_dt,
+                dias_planificacion=dias_planificacion,
+                dias_cobertura_base=dias_cobertura_base
+            )
+        """
+        valores_dias_cobertura = [3, 7, 14]  # Ajustá los valores según lo que quieras probar
+
+        for dias_cobertura_base in valores_dias_cobertura:
+            print(f"Probando con dias_cobertura_base={dias_cobertura_base}")
+
+            # 2. Aplicar Simplex
+            try:
+                productos_optimizados = aplicar_simplex(
+                    productos_validos=productos_validos,
+                    horas_disponibles=horas_disponibles,
+                    dias_planificacion=dias_planificacion,
+                    dias_cobertura_base=dias_cobertura_base
+                )
+
+                if not productos_optimizados:
+                    raise ValueError("Error en la optimización")
+
+                # 3. Exportar resultados
+                exportar_resultados(
+                    productos_optimizados=productos_optimizados,
+                    productos=productos,  # Agregamos todos los productos originales
+                    fecha_dataset=fecha_dataset_dt,
+                    fecha_planificacion=fecha_planificacion_dt,
+                    dias_planificacion=dias_planificacion,
+                    dias_cobertura_base=dias_cobertura_base
+                )
+
+            except Exception as e:
+                print(f"Fallo con dias_cobertura_base={dias_cobertura_base}: {e}")
+
         logger.info("Planificación completada exitosamente")
         
     except Exception as e:
