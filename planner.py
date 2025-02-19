@@ -227,79 +227,80 @@ def planificar_produccion_diaria(productos_validos, horas_disponibles_dia):
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
     """Aplica el método Simplex para optimizar la producción"""
     try:
-        logger.info("Iniciando aplicar_simplex")
         n_productos = len(productos_validos)
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
         # Función objetivo
         coeficientes = []
         for producto in productos_validos:
-            logger.debug(f"Calculando coeficiente para producto {producto.cod_art}")
-            logger.debug(f"demanda_media: {producto.demanda_media}, cobertura_inicial: {producto.cobertura_inicial}")
-            
             if producto.demanda_media > 0:
-                if isinstance(producto.cobertura_inicial, (int, float)) and producto.cobertura_inicial > 0:
-                    prioridad = max(0, 1/producto.cobertura_inicial)
-                    logger.debug(f"Prioridad calculada: {prioridad}")
-                else:
-                    prioridad = 0
-                    logger.debug("Cobertura inicial inválida o 0, prioridad establecida a 0")
+                prioridad = max(0, 1/producto.cobertura_inicial)
             else:
                 prioridad = 0
-                logger.debug("Demanda media 0, prioridad establecida a 0")
             coeficientes.append(-prioridad)
 
         # Restricciones
-        logger.debug("Calculando restricciones")
         A_eq = np.zeros((1, n_productos))
-        for i, producto in enumerate(productos_validos):
-            logger.debug(f"Producto {producto.cod_art}: cajas_hora = {producto.cajas_hora}")
-            if producto.cajas_hora > 0:
-                A_eq[0][i] = 1 / producto.cajas_hora
-            else:
-                logger.warning(f"Producto {producto.cod_art} tiene cajas_hora = 0")
-                A_eq[0][i] = 0
-                
+        A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
+        A_ub = []
+        b_ub = []
+        for i, producto in enumerate(productos_validos):
+            if producto.demanda_media > 0:
+                row = [0] * n_productos
+                row[i] = -1
+                A_ub.append(row)
+                stock_min = (producto.demanda_media * cobertura_minima) - producto.stock_inicial
+                b_ub.append(-stock_min)
+
+        A_ub = np.array(A_ub)
+        b_ub = np.array(b_ub)
+
+        # Bounds
+        bounds = []
+        for producto in productos_validos:
+            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
+                min_cajas = 2 * producto.cajas_hora
+                max_cajas = min(
+                    horas_disponibles * producto.cajas_hora,
+                    producto.demanda_media * 60 - producto.stock_inicial
+                )
+                max_cajas = max(min_cajas, max_cajas)
+            else:
+                min_cajas = 0
+                max_cajas = 0
+            bounds.append((min_cajas, max_cajas))
+
         # Optimización
-        result = linprog(c=coeficientes, A_eq=A_eq, b_eq=b_eq, method='highs')
+        result = linprog(
+            c=coeficientes,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            A_ub=A_ub,
+            b_ub=b_ub,
+            bounds=bounds,
+            method='highs'
+        )
 
         if result.success:
-            logger.info("Optimización exitosa, procesando resultados")
             horas_producidas = 0
             
             for i, producto in enumerate(productos_validos):
-                logger.debug(f"Procesando resultado para producto {producto.cod_art}")
-                
-                # Asignar producción
                 producto.cajas_a_producir = max(0, round(result.x[i]))
-                logger.debug(f"Cajas a producir: {producto.cajas_a_producir}")
                 
                 if producto.cajas_hora > 0:
                     producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                    logger.debug(f"Horas necesarias calculadas: {producto.horas_necesarias}")
                 else:
                     producto.horas_necesarias = 0
-                    logger.warning(f"No se pueden calcular horas para {producto.cod_art} (cajas_hora = 0)")
                 
                 horas_producidas += producto.horas_necesarias
-                
-                # Calcular cobertura final
-                if producto.demanda_media > 0:
-                    try:
-                        producto.cobertura_final_plan = (
-                            producto.stock_inicial + producto.cajas_a_producir
-                        ) / producto.demanda_media
-                        logger.debug(f"Cobertura final calculada: {producto.cobertura_final_plan}")
-                    except Exception as e:
-                        logger.error(f"Error calculando cobertura final para {producto.cod_art}: {str(e)}")
-                        producto.cobertura_final_plan = float('inf')
-                else:
-                    logger.warning(f"No se puede calcular cobertura para {producto.cod_art} (demanda_media = 0)")
-                    producto.cobertura_final_plan = float('inf')
+                               
+                producto.cobertura_final_plan = (
+                    producto.stock_inicial + producto.cajas_a_producir
+                ) / producto.demanda_media
             
-            logger.info(f"Optimización finalizada - Horas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
+            logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
             return productos_validos
         else:
             logger.error(f"Error en optimización: {result.message}")

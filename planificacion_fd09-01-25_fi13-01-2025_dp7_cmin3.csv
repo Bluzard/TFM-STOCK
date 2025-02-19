@@ -4,9 +4,9 @@
 401111;Bocata;Válido sin producción;16,42;1292,33;0;78,72;78,72
 401301;Baguette Plus;Válido sin producción;9,6;831,6;0;86,62;86,62
 401881;Bollo;Válido sin producción;3,4;356,4;0;104,82;104,82
-402011;Viena Mondat 145 gr;Válido sin producción;56,5;1419,0;0;25,12;25,12
+402011;Viena Mondat 145 gr;Planificado;56,5;1419,0;493;25,12;33,84
 403341;Barra de Viena;Válido sin producción;26,9;1312,4;0;48,79;48,79
-403801;Mini Viena Andaluza;Válido sin producción;6,6;113,6;0;17,21;17,21
+403801;Mini Viena Andaluza;Planificado;6,6;113,6;411;17,21;79,48
 405121;Miniatura con Salvado;Válido sin producción;0,25;427,0;0;1708,0;1708,0
 406002;Panecito Integral 100% Ecológico Easy;Válido sin producción;0,1;615,6;0;6156,0;6156,0
 406301;Viena Mondat con Salvado 145 gr;Válido sin producción;17,1;578,6;0;33,84;33,84
@@ -21,29 +21,29 @@
 423611;Alcachofa Semillada con Sésamo 4,35%;Válido sin producción;0,2;242,2;0;1211,0;1211,0
 425351;Payesito Mondat;Válido sin producción;1,19;483,24;0;406,08;406,08
 430101;Pan Bocadillo Sin Sal Añadida Easy;No válido;0,0;56,0;0;0,0;0,0
-430401;Mini Panecillo Easy;Válido sin producción;38,5;563,0;0;14,62;14,62
-430621;Pepito Easy;Válido sin producción;93,3;1499,8;0;16,08;16,08
+430401;Mini Panecillo Easy;Planificado;38,5;563,0;270;14,62;21,64
+430621;Pepito Easy;Planificado;93,3;1499,8;333;16,08;19,64
 430702;Panecito Ecológico Easy;Válido sin producción;7,3;1714,8;0;234,9;234,9
 430731;Panecito Easy;Válido sin producción;25,5;1616,0;0;63,37;63,37
-431610;Bollito 100% Integral Easy Pack 8 unidades;Válido sin producción;12,85;364,59;0;28,37;28,37
-432111;Pepito Sin Sal Añadida Easy;Válido sin producción;11,39;170,43;0;14,96;14,96
-432211;Pepito con Salvado Easy;Válido sin producción;53,81;777,77;0;14,45;14,45
+431610;Bollito 100% Integral Easy Pack 8 unidades;Planificado;12,85;364,59;272;28,37;49,53
+432111;Pepito Sin Sal Añadida Easy;Planificado;11,39;170,43;332;14,96;44,1
+432211;Pepito con Salvado Easy;Planificado;53,81;777,77;332;14,45;20,62
 432311;Pepito con Salvado Sin Sal Añadida Easy;Válido sin producción;10,09;407,64;0;40,41;40,41
 432421;Bollo Easy;Válido sin producción;13,9;620,4;0;44,63;44,63
 432501;Pan Bocadillo con Salvado Easy;No válido;0,0;0,0;0;0,0;0,0
-432821;Pan Bocadillo Easy;Válido sin producción;27,3;728,8;0;26,7;26,7
+432821;Pan Bocadillo Easy;Planificado;27,3;728,8;340;26,7;39,15
 432911;Panecito con Salvado Easy;Válido sin producción;7,9;325,4;0;41,19;41,19
 433701;Bollito Easy Pack de 8 Uds;Válido sin producción;1,2;792,2;0;660,17;660,17
 434011;Panecito Sin Sal Añadida Easy;Válido sin producción;3,25;336,02;0;103,51;103,51
 434111;Panecito con Salvado Sin Sal Añadida Easy;No válido;0,0;643,0;0;0,0;0,0
-434201;Viena Easy;Válido sin producción;41,55;810,79;0;19,51;19,51
-434721;Bollito Easy;Planificado;34,47;175,13;16047;5,08;470,64
+434201;Viena Easy;Planificado;41,55;810,79;371;19,51;28,44
+434721;Bollito Easy;Planificado;34,47;175,13;1893;5,08;60,0
 435711;Rombito Integral 100%;Válido sin producción;2,6;166,6;0;64,08;64,08
 436701;Mollete Multicereal con Quinoa (3%);Válido sin producción;0,1;24,6;0;246,0;246,0
 438801;Panecillo con Semillas;Válido sin producción;0,55;195,79;0;353,7;353,7
 453243;Panecillo 100% Integral;Válido sin producción;11,7;1068,2;0;91,3;91,3
-453251;Panecillo 100% Integral;Válido sin producción;106,4;826,4;0;7,77;7,77
-5718540;Panecillo con  Semillas;Válido sin producción;82,75;1846,99;0;22,32;22,32
+453251;Panecillo 100% Integral;Planificado;106,4;826,4;238;7,77;10,0
+5718540;Panecillo con  Semillas;Planificado;82,75;1846,99;278;22,32;25,68
 5718619;Pulguita;Válido sin producción;49,24;3346,03;0;67,95;67,95
-5720811;Baguetina Cereales;Válido sin producción;205,4;982,4;0;4,78;4,78
+5720811;Baguetina Cereales;Planificado;205,4;982,4;8884;4,78;48,04
 604301;Pepito Easy Pack 5 uds;Válido sin producción;1,5;209,0;0;139,33;139,33
