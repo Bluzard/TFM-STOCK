@@ -2,42 +2,11 @@ import logging
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
-from copy import deepcopy
 from scipy.optimize import linprog
 from csv_loader import leer_indicaciones_articulos
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-def ordenar_productos_planificacion(productos_validos):
-    """
-    Ordena los productos según la lógica de priorización:
-    1. Orden de planificación (INICIO, intermedio, FINAL)
-    2. Productos alergénicos (primero)
-    3. Grupo (COD_GRU)
-    4. Prioridad semanal
-    5. Cobertura (menor primero)
-    """
-    def clave_ordenamiento(producto):
-        # Orden de planificación
-        orden_valor = {
-            'INICIO': 0,
-            '': 1,
-            'FINAL': 2
-        }.get(producto.configuracion.orden_planificacion, 1)
-        
-        # Productos alergénicos primero en su grupo
-        alergenicos_valor = 0 if producto.configuracion.grupo_alergenicos else 1
-        
-        return (
-            orden_valor,
-            alergenicos_valor,
-            producto.cod_gru,
-            producto.configuracion.prioridad_semanal,
-            producto.cobertura_inicial if isinstance(producto.cobertura_inicial, (int, float)) else float('inf')
-        )
-    
-    return sorted(productos_validos, key=clave_ordenamiento)
 
 def calcular_tiempo_cambio(producto_actual, producto_siguiente):
     """
@@ -64,8 +33,213 @@ def calcular_tiempo_cambio(producto_actual, producto_siguiente):
     
     return tiempo_total
 
+def ordenar_productos_produccion(productos):
+    """
+    Ordena los productos para producción considerando:
+    1. Orden de planificación (INICIO, intermedio, FINAL)
+    2. Productos alergénicos
+    3. Prioridad semanal
+    4. Cobertura inicial
+    """
+    def clave_ordenamiento(producto):
+        orden_valor = {
+            'INICIO': 0,
+            '': 1,
+            'FINAL': 2
+        }.get(producto.configuracion.orden_planificacion, 1)
+        
+        return (
+            orden_valor,
+            0 if producto.configuracion.grupo_alergenicos else 1,
+            producto.configuracion.prioridad_semanal,
+            -producto.cobertura_inicial if isinstance(producto.cobertura_inicial, (int, float)) else 0
+        )
+    
+    return sorted(productos, key=clave_ordenamiento)
+
+def es_dia_valido(producto, dia):
+    """
+    Verifica si un producto debe producirse en un día específico
+    
+    Args:
+    - producto: Objeto producto
+    - dia: Número de día en la planificación
+    
+    Returns:
+    - Boolean indicando si es válido
+    """
+    orden = producto.configuracion.orden_planificacion
+    
+    if not orden or orden == '':
+        return True
+    
+    if orden == 'INICIO':
+        return dia < 2  # Lunes y martes
+    
+    if orden == 'FINAL':
+        return dia >= 3  # Jueves y viernes
+    
+    return True
+
+def planificar_dia(productos_validos, horas_disponibles_dia, dia):
+    """
+    Planifica la producción para un día específico
+    
+    Args:
+    - productos_validos: Lista de productos válidos
+    - horas_disponibles_dia: Horas disponibles en el día
+    - dia: Número de día en la planificación
+    
+    Returns:
+    - Lista de productos planificados para el día
+    """
+    tiempo_disponible = horas_disponibles_dia * 60  # Convertir a minutos
+    productos_ordenados = ordenar_productos_produccion(productos_validos)
+    
+    planificacion_dia = []
+    producto_actual = None
+    tiempo_acumulado = 0
+    
+    for producto in productos_ordenados:
+        # Verificar si es un día válido para este producto
+        if not es_dia_valido(producto, dia):
+            continue
+        
+        # Calcular tiempo de cambio
+        tiempo_cambio = calcular_tiempo_cambio(producto_actual, producto)
+        
+        # Tiempo mínimo de producción (2 horas)
+        tiempo_minimo_produccion = 120  # 2 horas en minutos
+        
+        # Verificar tiempo disponible
+        tiempo_restante = tiempo_disponible - tiempo_acumulado
+        
+        if tiempo_restante >= (tiempo_cambio + tiempo_minimo_produccion):
+            # Calcular tiempo de producción
+            tiempo_produccion = min(
+                tiempo_restante - tiempo_cambio,
+                (producto.demanda_media * 60 - producto.stock_inicial) / producto.cajas_hora * 60
+            )
+            
+            # Verificar si cumple con el mínimo de producción
+            if tiempo_produccion >= tiempo_minimo_produccion:
+                cajas_producir = (tiempo_produccion / 60) * producto.cajas_hora
+                
+                # Verificar capacidad de almacenamiento solo si hay valor válido de cajas_palet
+                if producto.configuracion.cajas_palet > 0:
+                    ocupacion_nueva = cajas_producir / producto.configuracion.cajas_palet
+                    if ocupacion_nueva > producto.configuracion.capacidad_almacen:
+                        continue  # Saltamos este producto si excede capacidad
+                else:
+                    # Si no hay valor de cajas_palet, asumimos que no hay restricción de almacenamiento
+                    ocupacion_nueva = 0
+                
+                # Añadir a planificación
+                entrada_planificacion = {
+                    'producto': producto,
+                    'dia': dia,
+                    'cajas': cajas_producir,
+                    'tiempo_cambio': tiempo_cambio / 60,  # Convertir a horas
+                    'tiempo_produccion': tiempo_produccion / 60,  # Convertir a horas
+                    'hora_inicio': tiempo_acumulado / 60,  # Hora de inicio en el día
+                    'ocupacion_almacen': ocupacion_nueva
+                }
+                
+                planificacion_dia.append(entrada_planificacion)
+                
+                # Actualizar tiempos
+                tiempo_acumulado += tiempo_cambio + tiempo_produccion
+                producto_actual = producto
+    
+    return planificacion_dia
+
+def optimizar_planificacion_multidia(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
+    """
+    Optimiza la planificación considerando múltiples días
+    
+    Args:
+    - productos_validos: Lista de productos válidos
+    - horas_disponibles: Horas totales disponibles
+    - dias_planificacion: Número de días a planificar
+    - dias_cobertura_base: Días mínimos de cobertura requeridos
+    
+    Returns:
+    - Lista de productos planificados
+    """
+    # Distribuir horas diarias
+    horas_dia = horas_disponibles / dias_planificacion
+    
+    # Planificación global
+    planificacion_global = []
+    
+    # Planificar por día
+    for dia in range(dias_planificacion):
+        # Crear copia de productos para este día
+        productos_dia = [p for p in productos_validos]
+        
+        # Planificar día
+        planificacion_dia = planificar_dia(
+            productos_dia, 
+            horas_dia, 
+            dia
+        )
+        
+        # Actualizar productos y añadir a planificación global
+        planificacion_global.extend(planificacion_dia)
+        
+        # Actualizar stock y demanda
+        for entrada in planificacion_dia:
+            producto = entrada['producto']
+            cajas_producir = entrada['cajas']
+            
+            # Actualizar stock
+            producto.stock_inicial += cajas_producir
+            
+            # Ajustar demanda y cobertura
+            if producto.demanda_media > 0:
+                producto.demanda_media -= cajas_producir / dias_planificacion
+                producto.cobertura_inicial = producto.stock_inicial / producto.demanda_media
+    
+    # Procesar productos finales
+    for producto in productos_validos:
+        # Calcular cobertura final
+        if producto.demanda_media > 0:
+            producto.cobertura_final_plan = (
+                producto.stock_inicial + 
+                sum(p['cajas'] for p in planificacion_global if p['producto'].cod_art == producto.cod_art)
+            ) / producto.demanda_media
+        
+        # Calcular cajas producidas
+        producto.cajas_a_producir = sum(
+            p['cajas'] for p in planificacion_global if p['producto'].cod_art == producto.cod_art
+        )
+        
+        # Calcular horas necesarias
+        producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora if producto.cajas_hora > 0 else 0
+        
+        # Guardar día y hora de planificación
+        entradas_producto = [p for p in planificacion_global if p['producto'].cod_art == producto.cod_art]
+        if entradas_producto:
+            producto.dia_planificado = entradas_producto[0]['dia']
+            producto.hora_inicio = entradas_producto[0]['hora_inicio']
+    
+    return productos_validos
+
 def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion, dias_no_habiles, horas_mantenimiento):
-    """Calcula todas las fórmulas para cada producto y aplica filtros"""
+    """
+    Calcula todas las fórmulas para cada producto y aplica filtros
+    
+    Args:
+    - productos: Lista de productos
+    - fecha_inicio: Fecha de inicio de la planificación
+    - fecha_dataset: Fecha del dataset
+    - dias_planificacion: Número de días a planificar
+    - dias_no_habiles: Días no laborables en el periodo
+    - horas_mantenimiento: Horas de mantenimiento programadas
+    
+    Returns:
+    - Tuple (productos_validos, horas_disponibles) o (None, None) si hay error
+    """
     try:
         # 1. Cálculo de Horas Disponibles
         horas_disponibles = 24 * (dias_planificacion - dias_no_habiles) - horas_mantenimiento
@@ -73,12 +247,13 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         configuraciones = leer_indicaciones_articulos()        
         productos_validos = []
 
-        # Convertir fechas usando el formato correcto
+        # Convertir fechas
         try:
             fecha_inicio_dt = datetime.strptime(fecha_inicio, '%d-%m-%Y')
-            if len(fecha_dataset.split('-')[2]) == 2:  # Si el año tiene 2 dígitos
+            # Verificar formato de año en fecha_dataset
+            if len(fecha_dataset.split('-')[2]) == 2:
                 fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%y')
-            else:  # Si el año tiene 4 dígitos
+            else:
                 fecha_dataset_dt = datetime.strptime(fecha_dataset, '%d-%m-%Y')
             
             logger.info(f"Fecha inicio: {fecha_inicio_dt}, Fecha dataset: {fecha_dataset_dt}")
@@ -87,12 +262,12 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             return None, None
         
         for producto in productos:
-            # Obtener configuración del producto
+            # Obtener configuración
             config = configuraciones.get(producto.cod_art)
             if config:
                 producto.configuracion = config
             else:
-                continue  # Saltamos productos sin configuración
+                continue
             
             # 2. Cálculo de demanda media
             if producto.m_vta_15_aa > 0:
@@ -110,30 +285,26 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             
             # 4. Actualizar Disponible
             if producto.primera_of != '(en blanco)':
-                of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
-                if of_date >= fecha_dataset_dt and of_date < fecha_inicio_dt:
+                try:
+                    of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
+                    if of_date >= fecha_dataset_dt and of_date < fecha_inicio_dt:
                         producto.disponible = producto.disponible + producto.of
+                except ValueError:
+                    logger.warning(f"Formato de fecha inválido en primera_of para {producto.cod_art}")
             
             # 5. Stock Inicial
-            producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
+            producto.stock_inicial = (
+                producto.disponible + 
+                producto.calidad + 
+                producto.stock_externo - 
+                producto.demanda_provisoria
+            )
 
-            # Alerta stock inicial negativo
             if producto.stock_inicial < 0:
-                print("\n⚠️  ALERTA: STOCK INICIAL NEGATIVO ⚠️")
-                print(f"Producto: {producto.cod_art} - {producto.nom_art}")
-                print("El stock inicial del producto es menor a 0.")
-                print("🔹 Se recomienda adelantar la planificación para evitar problemas.\n")
-                
-                respuesta = input("¿Desea continuar de todos modos? (s/n): ").strip().lower()
-                if respuesta != 's':
-                    print("⛔ Proceso interrumpido por el usuario.")
-                    exit()
-                print("✅ Continuando con la ejecución...")
-
+                logger.warning(f"Stock inicial negativo para {producto.cod_art}. Ajustando a 0.")
                 producto.stock_inicial = 0
-                logger.warning(f"Producto {producto.cod_art}: Stock Inicial negativo. Se ajustó a 0.")
 
-            # 6. Cobertura Inicial  
+            # 6. Cobertura Inicial
             if producto.demanda_media > 0:
                 producto.cobertura_inicial = producto.stock_inicial / producto.demanda_media
             else:
@@ -142,12 +313,14 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             # 7. Demanda Periodo
             producto.demanda_periodo = producto.demanda_media * dias_planificacion
             
-            # 8. Stock de Seguridad (3 días)
-            producto.stock_seguridad = producto.demanda_media * 3       
-
+            # 8. Stock de Seguridad
+            producto.stock_seguridad = producto.demanda_media * 3
+            
             # 9. Cobertura Final Estimada
             if producto.demanda_media > 0:
-                producto.cobertura_final_est = (producto.stock_inicial - producto.demanda_periodo) / producto.demanda_media
+                producto.cobertura_final_est = (
+                    producto.stock_inicial - producto.demanda_periodo
+                ) / producto.demanda_media
             else:
                 producto.cobertura_final_est = 'NO VALIDO'
 
@@ -160,7 +333,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
                 producto.cobertura_final_est != 'NO VALIDO'):
                 productos_validos.append(producto)
 
-        # Ordenar productos según prioridad
+        # Ordenar productos
         productos_validos.sort(key=lambda p: (
             {'INICIO': 0, '': 1, 'FINAL': 2}[p.configuracion.orden_planificacion],
             p.configuracion.prioridad_semanal,
@@ -173,83 +346,39 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         
     except Exception as e:
         logger.error(f"Error en cálculos: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None, None
 
-
-def planificar_produccion_diaria(productos_validos, horas_disponibles_dia):
-    """Planifica la producción de un día considerando prioridades y tiempos de cambio"""
-    tiempo_disponible = horas_disponibles_dia * 60  # Convertir a minutos
-    productos_ordenados = ordenar_productos_planificacion(productos_validos)
-    
-    planificacion = []
-    producto_actual = None
-    tiempo_acumulado = 0
-    
-    for producto in productos_ordenados:
-        if producto.demanda_media <= 0:
-            continue
-            
-        # Calcular tiempo de cambio
-        tiempo_cambio = calcular_tiempo_cambio(producto_actual, producto)
-        
-        # Verificar tiempo mínimo necesario (cambio + 2 horas producción)
-        tiempo_minimo = tiempo_cambio + (2 * 60)
-        tiempo_restante = tiempo_disponible - tiempo_acumulado
-        
-        if tiempo_restante >= tiempo_minimo:
-            # Calcular tiempo de producción disponible
-            tiempo_produccion = min(
-                tiempo_restante - tiempo_cambio,
-                (producto.demanda_media * 60 - producto.stock_inicial) / producto.cajas_hora * 60
-            )
-            
-            # Asegurar mínimo 2 horas de producción
-            if tiempo_produccion >= 120:  # 120 minutos = 2 horas
-                cajas_producir = (tiempo_produccion / 60) * producto.cajas_hora
-                
-                # Verificar capacidad de almacenamiento
-                ocupacion_nueva = cajas_producir / producto.configuracion.cajas_palet
-                if ocupacion_nueva <= producto.configuracion.capacidad_almacen:
-                    planificacion.append({
-                        'producto': producto,
-                        'cajas': cajas_producir,
-                        'tiempo_cambio': tiempo_cambio,
-                        'tiempo_produccion': tiempo_produccion,
-                        'inicio': tiempo_acumulado + tiempo_cambio,
-                        'ocupacion': ocupacion_nueva
-                    })
-                    
-                    tiempo_acumulado += tiempo_cambio + tiempo_produccion
-                    producto_actual = producto
-    
-    return planificacion
-
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
-    """Aplica el método Simplex para optimizar la producción"""
+    """
+    Aplica el método Simplex para optimizar la producción
+    """
     try:
         n_productos = len(productos_validos)
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
-        # Función objetivo
+        # Función objetivo: priorizar productos con menor cobertura
         coeficientes = []
         for producto in productos_validos:
             if producto.demanda_media > 0:
                 prioridad = max(0, 1/producto.cobertura_inicial)
             else:
                 prioridad = 0
-            coeficientes.append(-prioridad)
+            coeficientes.append(-prioridad)  # Negativo porque minimizamos
 
-        # Restricciones
+        # Restricción de horas totales disponibles
         A_eq = np.zeros((1, n_productos))
         A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
         b_eq = [horas_disponibles]
 
+        # Restricciones de stock mínimo
         A_ub = []
         b_ub = []
         for i, producto in enumerate(productos_validos):
             if producto.demanda_media > 0:
                 row = [0] * n_productos
-                row[i] = -1
+                row[i] = -1  # Coeficiente para el producto actual
                 A_ub.append(row)
                 stock_min = (producto.demanda_media * cobertura_minima) - producto.stock_inicial
                 b_ub.append(-stock_min)
@@ -257,14 +386,14 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         A_ub = np.array(A_ub)
         b_ub = np.array(b_ub)
 
-        # Bounds
+        # Límites de producción por producto
         bounds = []
         for producto in productos_validos:
             if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
-                min_cajas = 2 * producto.cajas_hora
+                min_cajas = 2 * producto.cajas_hora  # Mínimo 2 horas de producción
                 max_cajas = min(
-                    horas_disponibles * producto.cajas_hora,
-                    producto.demanda_media * 60 - producto.stock_inicial
+                    horas_disponibles * producto.cajas_hora,  # No exceder horas disponibles
+                    producto.demanda_media * 60 - producto.stock_inicial  # No exceder 60 días
                 )
                 max_cajas = max(min_cajas, max_cajas)
             else:
@@ -272,7 +401,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 max_cajas = 0
             bounds.append((min_cajas, max_cajas))
 
-        # Optimización
+        # Optimización usando método highs
         result = linprog(
             c=coeficientes,
             A_eq=A_eq,
@@ -284,140 +413,105 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         )
 
         if result.success:
-            horas_producidas = 0
-            
+            # Asignar resultados a productos
             for i, producto in enumerate(productos_validos):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
+                producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
                 
-                if producto.cajas_hora > 0:
-                    producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                else:
-                    producto.horas_necesarias = 0
-                
-                horas_producidas += producto.horas_necesarias
-                               
-                producto.cobertura_final_plan = (
-                    producto.stock_inicial + producto.cajas_a_producir
-                ) / producto.demanda_media
+                if producto.demanda_media > 0:
+                    producto.cobertura_final_plan = (
+                        producto.stock_inicial + producto.cajas_a_producir
+                    ) / producto.demanda_media
             
-            logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
-            return productos_validos
+            # Distribuir en días
+            return optimizar_planificacion_multidia(
+                productos_validos,
+                horas_disponibles,
+                dias_planificacion,
+                dias_cobertura_base
+            )
         else:
             logger.error(f"Error en optimización: {result.message}")
             return None
 
     except Exception as e:
         logger.error(f"Error en Simplex: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
-def es_dia_valido(producto, fecha):
-    """Verifica si el producto debe planificarse en la fecha dada"""
-    orden = producto.configuracion.orden_planificacion
-    dia_semana = fecha.weekday()
-    
-    if orden == 'INICIO':
-        return dia_semana < 2  # Lunes y martes
-    elif orden == 'FINAL':
-        return dia_semana >= 3  # Jueves y viernes
-    return True  # Productos sin orden específico
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
-    """Exporta los resultados de la planificación a un archivo CSV"""
+    """
+    Exporta los resultados de la planificación a CSV
+    """
     try:
-        logger.info("Iniciando exportación de resultados")
         datos = []
         configuraciones = leer_indicaciones_articulos()
         
-        # Obtener todos los productos activos
+        # Procesar todos los productos activos
         for producto in productos:
-            try:
-                logger.debug(f"Procesando producto para exportación: {producto.cod_art}")
+            if hasattr(producto, 'configuracion') and producto.configuracion.info_extra not in ['DESCATALOGADO', 'PEDIDO']:
+                estado = "No válido"  # Estado por defecto
                 
-                if hasattr(producto, 'configuracion') and producto.configuracion.info_extra not in ['DESCATALOGADO', 'PEDIDO']:
-                    estado = "No válido"
-                    
-                    # Verificar si el producto está en productos_optimizados
-                    producto_opt = next((p for p in productos_optimizados if p.cod_art == producto.cod_art), None)
-                    
-                    if producto_opt:
-                        if hasattr(producto_opt, 'horas_necesarias') and producto_opt.horas_necesarias > 0:
-                            estado = "Planificado"
-                        else:
-                            estado = "Válido sin producción"
-                        producto_final = producto_opt
-                    else:
-                        producto_final = producto
-                        
-                    logger.debug(f"Estado del producto: {estado}")
-                    
-                    # Valores seguros con logging
-                    demanda_media = 0
-                    if hasattr(producto_final, 'demanda_media'):
-                        demanda_media = float(producto_final.demanda_media) if isinstance(producto_final.demanda_media, (int, float)) else 0
-                    logger.debug(f"Demanda media: {demanda_media}")
-                    
-                    stock_inicial = getattr(producto_final, 'stock_inicial', 0)
-                    logger.debug(f"Stock inicial: {stock_inicial}")
-                    
-                    cajas_producir = getattr(producto_final, 'cajas_a_producir', 0)
-                    logger.debug(f"Cajas a producir: {cajas_producir}")
-                    
-                    # Cálculo seguro de coberturas con logging
-                    cobertura_inicial = 0
-                    cobertura_final = 0
-                    try:
-                        if demanda_media > 0:
-                            cobertura_inicial = stock_inicial / demanda_media
-                            cobertura_final = (stock_inicial + cajas_producir) / demanda_media
-                            logger.debug(f"Coberturas calculadas - Inicial: {cobertura_inicial}, Final: {cobertura_final}")
-                        else:
-                            logger.warning(f"No se puede calcular cobertura para {producto_final.cod_art} (demanda_media = 0)")
-                    except Exception as e:
-                        logger.error(f"Error calculando coberturas para {producto_final.cod_art}: {str(e)}")
-                    
-                    datos.append({
-                        'COD_ART': producto_final.cod_art,
-                        'NOM_ART': producto_final.nom_art,
-                        'Estado': estado,
-                        'Demanda_Media': round(demanda_media, 2),
-                        'Stock_Inicial': round(stock_inicial, 2),
-                        'Cajas_a_Producir': round(cajas_producir, 2),
-                        'Cobertura_Inicial': round(cobertura_inicial, 2),
-                        'Cobertura_Final': round(cobertura_final, 2)
-                    })
-                    
-            except Exception as e:
-                logger.error(f"Error procesando producto {producto.cod_art}: {str(e)}")
-                continue
-        
-        logger.info(f"Productos procesados: {len(datos)}")
+                # Buscar producto en optimizados
+                producto_opt = next(
+                    (p for p in productos_optimizados if p.cod_art == producto.cod_art),
+                    None
+                )
+                
+                if producto_opt:
+                    estado = "Planificado" if producto_opt.horas_necesarias > 0 else "Válido sin producción"
+                    producto_final = producto_opt
+                else:
+                    producto_final = producto
+                
+                # Calcular valores seguros
+                demanda_media = producto_final.demanda_media if hasattr(producto_final, 'demanda_media') else 0
+                stock_inicial = producto_final.stock_inicial if hasattr(producto_final, 'stock_inicial') else 0
+                cajas_producir = producto_final.cajas_a_producir if hasattr(producto_final, 'cajas_a_producir') else 0
+                horas_necesarias = producto_final.horas_necesarias if hasattr(producto_final, 'horas_necesarias') else 0
+                
+                # Cálculo seguro de coberturas
+                cobertura_inicial = 0
+                cobertura_final = 0
+                if demanda_media > 0:
+                    cobertura_inicial = stock_inicial / demanda_media
+                    cobertura_final = (stock_inicial + cajas_producir) / demanda_media
+                
+                datos.append({
+                    'COD_ART': producto_final.cod_art,
+                    'NOM_ART': producto_final.nom_art,
+                    'Grupo': producto_final.cod_gru,
+                    'Estado': estado,
+                    'Demanda_Media': round(demanda_media, 2),
+                    'Stock_Inicial': round(stock_inicial, 2),
+                    'Cajas_a_Producir': round(cajas_producir, 2),
+                    'Horas_Necesarias': round(horas_necesarias, 2),
+                    'Cobertura_Inicial': round(cobertura_inicial, 2),
+                    'Cobertura_Final': round(cobertura_final, 2),
+                    'Dia_Planificado': getattr(producto_final, 'dia_planificado', ''),
+                    'Hora_Inicio': round(getattr(producto_final, 'hora_inicio', 0), 2)
+                })
         
         if not datos:
             raise ValueError("No hay datos para exportar")
-            
-        df = pd.DataFrame(datos)
-        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
         
+        # Crear DataFrame y ordenar
+        df = pd.DataFrame(datos)
+        df['orden_estado'] = df['Estado'].map({
+            'Planificado': 0,
+            'Válido sin producción': 1,
+            'No válido': 2
+        })
+        df = df.sort_values(['orden_estado', 'Grupo', 'Cobertura_Inicial'])
+        df = df.drop('orden_estado', axis=1)
+        
+        # Generar nombre de archivo y exportar
+        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
         df.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
     except Exception as e:
         logger.error(f"Error exportando resultados: {str(e)}")
         import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         raise
-
-def calcular_metricas_planificacion(planificacion):
-    """Calcula métricas globales de la planificación"""
-    total_tiempo_cambio = sum(plan['tiempo_cambio'] for plan in planificacion)
-    total_tiempo_produccion = sum(plan['tiempo_produccion'] for plan in planificacion)
-    total_cajas = sum(plan['cajas'] for plan in planificacion)
-    
-    logger.info(f"""
-    Métricas de planificación:
-    - Tiempo total de cambios: {total_tiempo_cambio/60:.2f} horas
-    - Tiempo total de producción: {total_tiempo_produccion/60:.2f} horas
-    - Total cajas planificadas: {total_cajas:.0f}
-    - Eficiencia: {(total_tiempo_produccion/(total_tiempo_produccion+total_tiempo_cambio))*100:.2f}%
-    """)
