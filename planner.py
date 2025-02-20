@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
@@ -243,6 +243,68 @@ def ordenar_productos(productos):
     
     # 3. Combinar los grupos en el orden correcto
     return inicio_ordenado + medio_ordenado + final_ordenado
+
+def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
+    """
+    Verifica si los pedidos confirmados provocan rotura de stock
+    """
+    try:
+        # Lista de productos que deben planificarse adicionalmente
+        productos_a_planificar = []
+
+        # Recorrer cada producto
+        for producto in productos:
+            if producto.demanda_media <= 0:
+                continue  # No se considera si no hay demanda media
+
+            # Obtener los pedidos para este producto
+            pedidos_producto = df_pedidos[df_pedidos['COD_ART'] == producto.cod_art]
+            if pedidos_producto.empty:
+                continue  # No hay pedidos para este producto
+
+            # Inicializar el stock previsto
+            stock_previsto = producto.stock_inicial
+            stock_seguridad = producto.demanda_media * 3
+
+            # Recorrer día a día
+            for i in range(dias_planificacion):
+                fecha_actual = fecha_dataset + timedelta(days=i)
+                fecha_str = fecha_actual.strftime('%d/%m/%Y')
+
+                # Restar la demanda media
+                stock_previsto -= producto.demanda_media
+
+                # Sumar la OF si la fecha es igual o superior a la del dataset
+                if producto.primera_of != '(en blanco)':
+                    of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
+                    if of_date <= fecha_actual:
+                        stock_previsto += producto.of
+
+                # Restar los pedidos del día
+                if fecha_str in df_pedidos.columns:
+                    pedido_dia = pedidos_producto[fecha_str].values[0]
+                    if pd.notna(pedido_dia):
+                        stock_previsto -= abs(pedido_dia)  # Los pedidos son negativos en el archivo
+
+                # Verificar si el stock previsto es menor que el stock de seguridad
+                if stock_previsto < stock_seguridad:
+                    logger.warning(f"El día {fecha_str}, el stock de seguridad ha sido sobrepasado para el producto {producto.cod_art}.")
+
+                    # Calcular la cantidad a fabricar
+                    dias_faltantes = dias_planificacion - i
+                    cantidad_a_fabricar = producto.demanda_media * min(dias_faltantes + 7, dias_planificacion) + abs(pedido_dia)
+
+                    # Añadir el producto a la lista de productos a planificar
+                    producto.cajas_a_producir = cantidad_a_fabricar
+                    productos_a_planificar.append(producto)
+                    break  # Solo necesitamos detectar la primera vez que se sobrepasa el stock de seguridad
+
+        logger.info(f"Se han identificado {len(productos_a_planificar)} productos adicionales para planificar debido a pedidos.")
+        return productos_a_planificar
+
+    except Exception as e:
+        logger.error(f"Error verificando pedidos: {str(e)}")
+        return []
 
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     """Exporta los resultados a un archivo CSV"""

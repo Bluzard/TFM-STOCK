@@ -2,6 +2,8 @@ import logging
 from datetime import datetime
 import os
 
+import pandas as pd
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -153,3 +155,28 @@ def verificar_dataset_existe(nombre_archivo):
     except Exception as e:
         logger.error(f"Error verificando dataset: {str(e)}")
         return False
+def leer_pedidos_pendientes(fecha_dataset):
+    try:
+        fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
+        archivo_pedidos = f'Pedidos pendientes {fecha_dataset_str}.csv'
+        
+        # Verificar si el archivo existe
+        if not os.path.exists(archivo_pedidos):
+            logger.warning(f"No se encontró el archivo de pedidos: {archivo_pedidos}")
+            return None
+
+        # Leer el archivo de pedidos
+        df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1')
+        
+        # Convertir fechas numéricas
+        fechas_pedidos = [col for col in df_pedidos.columns if col[0:2] in ['09','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31']]
+        df_pedidos[fechas_pedidos] = df_pedidos[fechas_pedidos].apply(pd.to_numeric, errors='coerce').fillna(0)
+        
+        # Convertir COD_ART a string
+        df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
+        
+        return df_pedidos
+
+    except Exception as e:
+        logger.error(f"Error leyendo pedidos pendientes: {str(e)}")
+        return None

@@ -4,8 +4,8 @@ from tkinter import ttk, filedialog, messagebox
 from tkcalendar import DateEntry
 from datetime import datetime
 import os
-from csv_loader import leer_dataset, verificar_dataset_existe
-from planner import calcular_formulas, aplicar_simplex, exportar_resultados
+from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_dataset_existe
+from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -155,27 +155,41 @@ class PlannerGUI:
             # Extraer nombre del dataset
             nombre_dataset = os.path.basename(self.dataset_path.get())
             
-            # 1. Leer dataset
+            # 1. Leer dataset y calcular fórmulas
             productos = leer_dataset(nombre_dataset)
             if not productos:
                 raise ValueError("Error al leer el dataset")
-            
-            # 2. Calcular fórmulas
+
             productos_validos, horas_disponibles = calcular_formulas(
                 productos=productos,
-                fecha_inicio=fecha_inicio.strftime('%d-%m-%Y'),
-                fecha_dataset=fecha_dataset.strftime('%d-%m-%Y'),
+                fecha_inicio=fecha_inicio,
+                fecha_dataset=fecha_dataset,
                 dias_planificacion=dias_planificacion,
                 dias_no_habiles=dias_no_habiles,
                 horas_mantenimiento=horas_mantenimiento
             )
-            
+
             if not productos_validos:
                 raise ValueError("Error en los cálculos")
-            
+
+            # 2. Verificar pedidos pendientes
+            df_pedidos = leer_pedidos_pendientes(fecha_dataset)
+            if df_pedidos is not None:
+                productos_a_planificar_adicionales = verificar_pedidos(
+                    productos=productos,
+                    df_pedidos=df_pedidos,
+                    fecha_dataset=fecha_dataset,
+                    dias_planificacion=dias_planificacion
+                )
+
+                # Combinar productos válidos con los adicionales
+                productos_a_planificar = productos_validos + productos_a_planificar_adicionales
+            else:
+                productos_a_planificar = productos_validos
+
             # 3. Aplicar Simplex
             productos_optimizados = aplicar_simplex(
-                productos_validos=productos_validos,
+                productos_validos=productos_a_planificar,
                 horas_disponibles=horas_disponibles,
                 dias_planificacion=dias_planificacion,
                 dias_cobertura_base=dias_cobertura
