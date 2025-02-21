@@ -162,8 +162,8 @@ class PlannerGUI:
 
             productos_validos, horas_disponibles = calcular_formulas(
                 productos=productos,
-                fecha_inicio=fecha_inicio,
-                fecha_dataset=fecha_dataset,
+                fecha_inicio=fecha_inicio.strftime('%d-%m-%Y'),  # Convertir fecha_inicio a string
+                fecha_dataset=fecha_dataset.strftime('%d-%m-%Y'),
                 dias_planificacion=dias_planificacion,
                 dias_no_habiles=dias_no_habiles,
                 horas_mantenimiento=horas_mantenimiento
@@ -173,12 +173,12 @@ class PlannerGUI:
                 raise ValueError("Error en los cálculos")
 
             # 2. Verificar pedidos pendientes
-            df_pedidos = leer_pedidos_pendientes(fecha_dataset)
+            df_pedidos = leer_pedidos_pendientes(fecha_dataset)  # Usar fecha_dataset sin .strftime()
             if df_pedidos is not None:
                 productos_a_planificar_adicionales = verificar_pedidos(
                     productos=productos,
                     df_pedidos=df_pedidos,
-                    fecha_dataset=fecha_dataset,
+                    fecha_dataset=fecha_dataset,  # Usar fecha_dataset directamente
                     dias_planificacion=dias_planificacion
                 )
 

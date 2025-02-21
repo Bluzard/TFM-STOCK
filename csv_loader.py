@@ -110,6 +110,9 @@ def leer_indicaciones_articulos():
                 idx_info = header.index('Info extra')
                 idx_cod = header.index('COD_ART')
                 idx_orden = header.index('ORDEN PLANIFICACION')
+                
+                # Usar 'cj/palet' en lugar de 'CAJAS_PALET'
+                idx_cajas_palet = header.index('cj/palet') 
             except ValueError:
                 logger.error("No se encontraron las columnas requeridas en el archivo de indicaciones")
                 return {}, set()
@@ -120,17 +123,24 @@ def leer_indicaciones_articulos():
                     continue
                     
                 campos = linea.strip().split(';')
-                if len(campos) > max(idx_info, idx_cod, idx_orden):
+                if len(campos) > max(idx_info, idx_cod, idx_orden, idx_cajas_palet):
                     info_extra = campos[idx_info].strip()
                     cod_art = campos[idx_cod].strip()
                     orden = campos[idx_orden].strip() if idx_orden < len(campos) else ''
+                    
+                    # Convertir cajas por palet a entero, con valor por defecto
+                    try:
+                        cajas_palet = int(campos[idx_cajas_palet]) if campos[idx_cajas_palet].strip() else 40
+                    except ValueError:
+                        cajas_palet = 40
                     
                     if info_extra in ['DESCATALOGADO', 'PEDIDO']:
                         productos_omitir.add(cod_art)
                     
                     productos_info[cod_art] = {
                         'info_extra': info_extra,
-                        'orden_planificacion': orden
+                        'orden_planificacion': orden,
+                        'cajas_palet': cajas_palet
                     }
         
         logger.info(f"Información de productos cargada: {len(productos_info)}")
@@ -138,12 +148,6 @@ def leer_indicaciones_articulos():
     except Exception as e:
         logger.error(f"Error leyendo indicaciones: {str(e)}")
         return {}, set()
-    except FileNotFoundError:
-        logger.error("No se encontró el archivo 'Indicaciones articulos.csv'")
-        return set()
-    except Exception as e:
-        logger.error(f"Error leyendo indicaciones de artículos: {str(e)}")
-        return set()
 
 def verificar_dataset_existe(nombre_archivo):
     try:

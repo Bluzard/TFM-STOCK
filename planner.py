@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
@@ -249,6 +249,8 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
     Verifica si los pedidos confirmados provocan rotura de stock
     """
     try:
+        if isinstance(fecha_dataset, date):
+            fecha_dataset = datetime.combine(fecha_dataset, datetime.min.time())
         # Lista de productos que deben planificarse adicionalmente
         productos_a_planificar = []
 
@@ -305,13 +307,57 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
     except Exception as e:
         logger.error(f"Error verificando pedidos: {str(e)}")
         return []
+    
+def calcular_ocupacion_almacen(productos, productos_info):
+    """
+    Calcula métricas de ocupación de almacén
+    
+    :param productos: Lista de productos producidos
+    :param productos_info: Diccionario con información adicional de productos
+    :return: Diccionario con métricas de ocupación
+    """
+    total_palets = 0
+    total_stock = 0
+    
+    for producto in productos:
+        # Obtener cajas por palet, usar 40 como valor por defecto
+        cajas_palet = productos_info.get(producto.cod_art, {}).get('cajas_palet', 40)
+        
+        # Calcular stock total (inicial + producido)
+        stock_total = producto.stock_inicial + producto.cajas_a_producir
+        
+        # Calcular número de palets
+        palets_producto = stock_total / cajas_palet
+        
+        total_palets += palets_producto
+        total_stock += stock_total
+    
+    # Métricas de penalización según documento original
+    penalizacion = 0
+    if total_palets > 1200:
+        penalizacion = -100
+    elif total_palets > 1000:
+        penalizacion = -50
+    elif total_palets > 800:
+        penalizacion = -10
+    
+    return {
+        'total_palets': round(total_palets, 2),
+        'total_stock': round(total_stock, 2),
+        'penalizacion_espacio': penalizacion
+    }
 
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     """Exporta los resultados a un archivo CSV"""
     try:
         datos = []
         productos_info, productos_omitir = leer_indicaciones_articulos()
-        
+
+        # Obtener información de productos
+        productos_info, _ = leer_indicaciones_articulos()
+        # Calcular ocupación de almacén
+        ocupacion = calcular_ocupacion_almacen(productos_optimizados, productos_info)
+
         # Agrupar productos por estado
         productos_planificados = []
         productos_validos = []
@@ -358,7 +404,11 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                 'Horas_Necesarias': round(horas_necesarias, 2),
                 'Cobertura_Inicial': round(producto.cobertura_inicial, 2) if producto.cobertura_inicial != 'NO VALIDO' else 0,
                 'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != 'NO VALIDO' else 0,
-                'Cobertura_Final_Est': round(producto.cobertura_final_est, 2) if producto.cobertura_final_est != 'NO VALIDO' else 0
+                'Cobertura_Final_Est': round(producto.cobertura_final_est, 2) if producto.cobertura_final_est != 'NO VALIDO' else 0,
+                'Tipo': 'RESUMEN',
+                'Total_Palets': ocupacion['total_palets'],
+                'Total_Stock': ocupacion['total_stock'],
+                'Penalizacion_Espacio': ocupacion['penalizacion_espacio']
             })
         
         df = pd.DataFrame(datos)
