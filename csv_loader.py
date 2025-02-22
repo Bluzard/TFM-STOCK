@@ -134,7 +134,7 @@ def leer_indicaciones_articulos():
                     except ValueError:
                         cajas_palet = 40
                     
-                    if info_extra in ['DESCATALOGADO', 'PEDIDO']:
+                    if info_extra in ['DESCATALOGADO'] #, 'PEDIDO']: Al incluir la mejora de pedidos pendientes solo descartamos los DESCATALOGADOS
                         productos_omitir.add(cod_art)
                     
                     productos_info[cod_art] = {
