@@ -149,7 +149,7 @@ def leer_indicaciones_articulos():
         logger.error(f"Error leyendo indicaciones: {str(e)}")
         return {}, set()
 
-def verificar_dataset_existe(nombre_archivo):
+def verificar_archivo_existe(nombre_archivo):
     try:
         if not os.path.exists(nombre_archivo):
             print(f"\n⚠️  ADVERTENCIA: No se encuentra el archivo '{nombre_archivo}'")
@@ -164,11 +164,6 @@ def leer_pedidos_pendientes(fecha_dataset):
         fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
         archivo_pedidos = f'Pedidos pendientes {fecha_dataset_str}.csv'
         
-        # Verificar si el archivo existe
-        if not os.path.exists(archivo_pedidos):
-            logger.warning(f"No se encontró el archivo de pedidos: {archivo_pedidos}")
-            return None
-
         # Leer el archivo de pedidos
         df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1')
         

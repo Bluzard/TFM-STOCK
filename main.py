@@ -4,7 +4,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkcalendar import DateEntry
 from datetime import datetime
 import os
-from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_dataset_existe
+from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_archivo_existe
 from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -103,7 +103,7 @@ class PlannerGUI:
             if not self.dataset_path.get():
                 raise ValueError("Seleccione un archivo dataset")
                 
-            if not verificar_dataset_existe(self.dataset_path.get()):
+            if not verificar_archivo_existe(self.dataset_path.get()):
                 raise ValueError("Archivo dataset no encontrado")
                 
             dias_planificacion = int(self.dias_planificacion.get())
