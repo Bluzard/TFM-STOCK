@@ -224,25 +224,49 @@ def optimizar_orden_grupos(productos):
     
     return ordered_products
 
-def ordenar_productos(productos):
+def ordenar_productos(df):
     """
-    Ordena los productos según los tres criterios:
-    1. Prioridad (INICIO -> sin valor -> FINAL)
-    2. Grupo (optimizando cambios entre MEC y VIME)
-    3. Cobertura (menor a mayor)
+    Ordena el DataFrame de productos según los criterios especificados
     """
-    # 1. Separar por prioridad
-    inicio = [p for p in productos if p.orden_planificacion == 'INICIO']
-    medio = [p for p in productos if not p.orden_planificacion]
-    final = [p for p in productos if p.orden_planificacion == 'FINAL']
+    # Definir orden de prioridad para Estado
+    df['orden_estado'] = df['Estado'].map({
+        'Planificado': 0,
+        'Válido sin producción': 1,
+        'No válido': 2
+    })
     
-    # 2. Optimizar cada grupo por separado
-    inicio_ordenado = optimizar_orden_grupos(inicio)
-    medio_ordenado = optimizar_orden_grupos(medio)
-    final_ordenado = optimizar_orden_grupos(final)
+    # Definir orden de prioridad para Orden_Planificacion
+    df['orden_planificacion'] = df['Orden_Planificacion'].map({
+        'INICIO': 0,
+        '': 1,
+        'FINAL': 2
+    }).fillna(1)
     
-    # 3. Combinar los grupos en el orden correcto
-    return inicio_ordenado + medio_ordenado + final_ordenado
+    # Definir orden para COD_GRU
+    df['orden_grupo'] = df['COD_GRU'].map({
+        'VIME': 0,
+        'MEC': 1
+    })
+    
+    # Asegurar que Cobertura_Inicial sea numérica
+    df['Cobertura_Sort'] = pd.to_numeric(df['Cobertura_Inicial'], errors='coerce').fillna(float('inf'))
+    
+    # Dar prioridad extra a productos con cobertura final estimada negativa
+    mask_negativa = df['Cobertura_Final_Est'] < 0
+    df.loc[mask_negativa, 'Cobertura_Sort'] = -1
+    
+    # Ordenar el DataFrame
+    df_ordenado = df.sort_values([
+        'orden_estado',
+        'orden_planificacion',
+        'orden_grupo',
+        'Cobertura_Sort'
+    ])
+    
+    # Eliminar columnas temporales de ordenamiento
+    df_ordenado = df_ordenado.drop(['orden_estado', 'orden_planificacion', 'orden_grupo', 'Cobertura_Sort'], axis=1)
+    
+    return df_ordenado
 
 def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
     """
@@ -348,78 +372,82 @@ def calcular_ocupacion_almacen(productos, productos_info):
     }
 
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
-    """Exporta los resultados a un archivo CSV"""
     try:
         datos = []
         productos_info, productos_omitir = leer_indicaciones_articulos()
-
-        # Obtener información de productos
-        productos_info, _ = leer_indicaciones_articulos()
-        # Calcular ocupación de almacén
-        ocupacion = calcular_ocupacion_almacen(productos_optimizados, productos_info)
-
-        # Agrupar productos por estado
-        productos_planificados = []
-        productos_validos = []
-        productos_no_validos = []
         
-        # Clasificar productos
+        # Procesar productos y calcular totales
+        total_palets = 0
+        total_stock = 0
+        
         for producto in productos:
             if producto.cod_art not in productos_omitir:
+                estado = "No válido"  # Por defecto
+                
                 # Verificar si el producto está en productos_optimizados
                 producto_opt = next((p for p in productos_optimizados if p.cod_art == producto.cod_art), None)
                 
                 if producto_opt:
                     if producto_opt.horas_necesarias > 0:
-                        productos_planificados.append(producto_opt)
+                        estado = "Planificado"
                     else:
-                        productos_validos.append(producto_opt)
+                        estado = "Válido sin producción"
+                    producto_final = producto_opt
                 else:
-                    productos_no_validos.append(producto)
+                    producto_final = producto
+                
+                # Obtener información adicional del producto
+                info_producto = productos_info.get(producto.cod_art, {})
+                cajas_palet = info_producto.get('cajas_palet', 40)  # Valor por defecto: 40
+                
+                # Calcular valores individuales
+                stock_total = producto_final.stock_inicial + (
+                    producto_final.cajas_a_producir if hasattr(producto_final, 'cajas_a_producir') else 0
+                )
+                palets = stock_total / cajas_palet if cajas_palet > 0 else 0
+                
+                # Actualizar totales
+                total_palets += palets
+                total_stock += stock_total
+                
+                datos.append({
+                    'COD_ART': producto_final.cod_art,
+                    'NOM_ART': producto_final.nom_art,
+                    'COD_GRU': producto_final.cod_gru,
+                    'Estado': estado,
+                    'Orden_Planificacion': info_producto.get('orden_planificacion', ''),
+                    'Demanda_Media': round(producto_final.demanda_media, 2) if producto_final.demanda_media != 'NO VALIDO' else 0,
+                    'Stock_Inicial': round(producto_final.stock_inicial, 2),
+                    'Cajas_a_Producir': producto_final.cajas_a_producir if hasattr(producto_final, 'cajas_a_producir') else 0,
+                    'Horas_Necesarias': round(producto_final.horas_necesarias, 2) if hasattr(producto_final, 'horas_necesarias') else 0,
+                    'Cobertura_Inicial': round(producto_final.cobertura_inicial, 2) if producto_final.cobertura_inicial != 'NO VALIDO' else 0,
+                    'Cobertura_Final': round(producto_final.cobertura_final_plan, 2) if hasattr(producto_final, 'cobertura_final_plan') else producto_final.cobertura_final_est,
+                    'Cobertura_Final_Est': round(producto_final.cobertura_final_est, 2) if producto_final.cobertura_final_est != 'NO VALIDO' else 0,
+                    'Total_Palets': round(palets, 2),
+                    'Total_Stock': round(stock_total, 2),
+                    'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
+                })
         
-        # Ordenar cada grupo
-        productos_planificados = ordenar_productos(productos_planificados)
-        productos_validos = ordenar_productos(productos_validos)
-        productos_no_validos = ordenar_productos(productos_no_validos)
-        
-        # Procesar productos en orden
-        for producto in productos_planificados + productos_validos + productos_no_validos:
-            estado = "Planificado" if producto in productos_planificados else \
-                    "Válido sin producción" if producto in productos_validos else \
-                    "No válido"
-                    
-            cobertura_final = producto.cobertura_final_plan if hasattr(producto, 'cobertura_final_plan') else producto.cobertura_final_est
-            cajas_producir = producto.cajas_a_producir if hasattr(producto, 'cajas_a_producir') else 0
-            horas_necesarias = producto.horas_necesarias if hasattr(producto, 'horas_necesarias') else 0
-            
-            datos.append({
-                'COD_ART': producto.cod_art,
-                'NOM_ART': producto.nom_art,
-                'COD_GRU': producto.cod_gru,
-                'Estado': estado,
-                'Orden_Planificacion': producto.orden_planificacion,
-                'Demanda_Media': round(producto.demanda_media, 2) if producto.demanda_media != 'NO VALIDO' else 0,
-                'Stock_Inicial': round(producto.stock_inicial, 2),
-                'Cajas_a_Producir': cajas_producir,
-                'Horas_Necesarias': round(horas_necesarias, 2),
-                'Cobertura_Inicial': round(producto.cobertura_inicial, 2) if producto.cobertura_inicial != 'NO VALIDO' else 0,
-                'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != 'NO VALIDO' else 0,
-                'Cobertura_Final_Est': round(producto.cobertura_final_est, 2) if producto.cobertura_final_est != 'NO VALIDO' else 0,
-                'Tipo': 'RESUMEN',
-                'Total_Palets': ocupacion['total_palets'],
-                'Total_Stock': ocupacion['total_stock'],
-                'Penalizacion_Espacio': ocupacion['penalizacion_espacio']
-            })
-        
+        # Convertir a DataFrame y ordenar
         df = pd.DataFrame(datos)
-            
+        df_ordenado = ordenar_productos(df)
+        
+        # Generar nombre de archivo y exportar
         nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
-
-        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        df_ordenado.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
     except Exception as e:
         logger.error(f"Error exportando resultados: {str(e)}")
-        logger.error("Tipo de fecha_planificacion: %s", type(fecha_planificacion))
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
+        
+def calcular_penalizacion_espacio(palets):
+    """Calcula la penalización por espacio ocupado"""
+    if palets > 1200:
+        return -100
+    elif palets > 1000:
+        return -50
+    elif palets > 800:
+        return -10
+    return 0
