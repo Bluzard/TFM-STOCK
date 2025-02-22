@@ -150,13 +150,29 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         # Bounds
         bounds = []
         for producto in productos_validos:
-            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
+            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:  # este valor de 30 hay que ver si suprimirlo y/o aumentarlo
+                # Calcular Cobertura_max basado en m_vta_15
+                if producto.m_vta_15 >= 150:
+                    cobertura_max = 10.00
+                elif 100 <= producto.m_vta_15 < 150:
+                    cobertura_max = 15.00
+                elif 50 <= producto.m_vta_15 < 100:
+                    cobertura_max = 20.00
+                elif 25 <= producto.m_vta_15 < 50:
+                    cobertura_max = 30.00
+                elif 10 <= producto.m_vta_15 < 25:
+                    cobertura_max = 60.00
+                else:
+                    # Para valores de m_vta_15 < 10, no limitamos la cobertura máxima
+                    cobertura_max = float('inf')  # Sin límite de cobertura máxima ya que puede entrar en conflicto con la restricción 2h min
+
+                # Calcular el límite máximo de cajas
                 min_cajas = 2 * producto.cajas_hora
                 max_cajas = min(
                     horas_disponibles * producto.cajas_hora,
-                    producto.demanda_media * 60 - producto.stock_inicial
+                    producto.demanda_media * cobertura_max - producto.stock_inicial
                 )
-                max_cajas = max(min_cajas, max_cajas)
+                max_cajas = max(min_cajas, max_cajas)  # Asegurar que max_cajas >= min_cajas
             else:
                 min_cajas = 0
                 max_cajas = 0
