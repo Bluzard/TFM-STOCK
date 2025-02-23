@@ -1,3 +1,5 @@
+# CARGA DE ARCHIVOS, INICIALIZACIÓN Y CLASS PRODUCTO
+
 import logging
 from datetime import datetime
 import os
@@ -17,6 +19,20 @@ class Producto:
         self.cod_gru = cod_gru
         self.of = self._convertir_float(of)
         self.cajas_hora = self._convertir_float(cajas_hora)
+
+        # Añadir_of_reales (80% de la estimación)
+        if self.of is not None:
+            self.of_reales = self.of * 0.8   # Hay una "merma productiva" del 20% con respecto a la estimación.
+        else:
+            self.of_reales = None
+            logger.error(f"Producto {self.cod_art}: of_reales es None")
+
+        # Añadir cajas_hora_reales (90% de cajas_hora)
+        if self.cajas_hora is not None:
+            self.cajas_hora_reales = self.cajas_hora * 0.9   # Hay una "merma productiva" del 10% con respecto a la estimación.
+        else:
+            self.cajas_hora_reales = None
+            logger.error(f"Producto {self.cod_art}: cajas_hora es None")  
         
         # Stocks
         self.disponible = self._convertir_float(disponible)
@@ -37,7 +53,7 @@ class Producto:
         self.m_vta_15_mas_aa = self._convertir_float(m_vta_15_mas_aa)
         
         # Campo de orden de planificación
-        self.orden_planificacion = orden_planificacion
+        self.orden_planificacion = 0  # Inicialmente 0, se asignará en la función ordenar_planificacion
         
         # Campos calculados (inicialmente 0)
         self.demanda_media = 0
@@ -49,6 +65,7 @@ class Producto:
         self.cobertura_final_est = 0
         self.cobertura_final_plan = 0
 
+    
     def _convertir_float(self, valor):
         if isinstance(valor, (int, float)):
             return float(valor)
@@ -134,7 +151,7 @@ def leer_indicaciones_articulos():
                     except ValueError:
                         cajas_palet = 40
                     
-                    if info_extra in ['DESCATALOGADO'] #, 'PEDIDO']: Al incluir la mejora de pedidos pendientes solo descartamos los DESCATALOGADOS
+                    if info_extra in ['DESCATALOGADO']: # Al incluir la mejora de pedidos pendientes solo descartamos los DESCATALOGADOS
                         productos_omitir.add(cod_art)
                     
                     productos_info[cod_art] = {
@@ -157,25 +174,42 @@ def verificar_archivo_existe(nombre_archivo):
             return False
         return True
     except Exception as e:
-        logger.error(f"Error verificando dataset: {str(e)}")
+        logger.error(f"Error verificando archivo: {str(e)}")
         return False
 def leer_pedidos_pendientes(fecha_dataset):
     try:
         fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
         archivo_pedidos = f'Pedidos pendientes {fecha_dataset_str}.csv'
         
-        # Leer el archivo de pedidos
-        df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1')
+        # Leer el archivo saltando las dos primeras filas (encabezados no necesarios)
+        df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1',skiprows=1)  # Saltar primera fila)
         
-        # Convertir fechas numéricas
-        fechas_pedidos = [col for col in df_pedidos.columns if col[0:2] in ['09','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31']]
-        df_pedidos[fechas_pedidos] = df_pedidos[fechas_pedidos].apply(pd.to_numeric, errors='coerce').fillna(0)
+        # Renombrar las columnas usando la primera fila real de datos
+        # Las fechas estarán en formato DD/MM/YYYY
+        columnas_fechas = [col for col in df_pedidos.columns if '/' in str(col)]
         
-        # Convertir COD_ART a string
+        # Mantener solo las columnas necesarias: COD_ART y fechas
+        columnas_mantener = ['COD_ART'] + columnas_fechas
+        df_pedidos = df_pedidos[columnas_mantener]
+        
+        # Asegurar que COD_ART sea string
         df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
+        
+        # Convertir columnas de fechas a números y llenar NaN con 0
+        for col in columnas_fechas:
+            df_pedidos[col] = pd.to_numeric(df_pedidos[col], errors='coerce').fillna(0)
+        
+        # Verificar que tenemos datos
+        if df_pedidos.empty:
+            logger.error("No se encontraron datos en el archivo de pedidos")
+            return None
+            
+        logger.info(f"Lectura exitosa de pedidos. Dimensiones: {df_pedidos.shape}")
         
         return df_pedidos
 
     except Exception as e:
         logger.error(f"Error leyendo pedidos pendientes: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None
