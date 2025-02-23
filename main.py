@@ -5,7 +5,7 @@ from tkcalendar import DateEntry
 from datetime import datetime
 import os
 from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_archivo_existe
-from calculos_y_funciones import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos, clasificar_grupos, ordenar_planificacion
+from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos, clasificar_grupos, ordenar_planificacion
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
