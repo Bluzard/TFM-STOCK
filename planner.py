@@ -113,89 +113,167 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
     except Exception as e:
         logger.error(f"Error en cálculos: {str(e)}")
         return None, None
+def calcular_cobertura_maxima(venta_media_15):
+    """
+    Calcula la cobertura máxima permitida según la venta media de 15 días
+    Tabla de límites:
+    M_Vta -15    | Cobertura máxima
+    >=150        | 10
+    100-149      | 15
+    50-99        | 20
+    25-49        | 30
+    10-24        | 60
+    <10          | Sin límite
+    """
+    if not isinstance(venta_media_15, (int, float)) or venta_media_15 <= 0:
+        return float('inf')
+        
+    if venta_media_15 >= 150:
+        return 10
+    elif venta_media_15 >= 100:
+        return 15
+    elif venta_media_15 >= 50:
+        return 20
+    elif venta_media_15 >= 25:
+        return 30
+    elif venta_media_15 >= 10:
+        return 60
+    else:
+        return float('inf')
 
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
-    """Aplica el método Simplex para optimizar la producción"""
-    try:
-        n_productos = len(productos_validos)
-        cobertura_minima = dias_cobertura_base + dias_planificacion
-
-        # Función objetivo
-        coeficientes = []
-        for producto in productos_validos:
-            if producto.demanda_media > 0:
-                prioridad = max(0, 1/producto.cobertura_inicial)
-            else:
-                prioridad = 0
-            coeficientes.append(-prioridad)
-
-        # Restricciones
-        A_eq = np.zeros((1, n_productos))
-        A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
-        b_eq = [horas_disponibles]
-
-        A_ub = []
-        b_ub = []
-        for i, producto in enumerate(productos_validos):
-            if producto.demanda_media > 0:
-                row = [0] * n_productos
-                row[i] = -1
-                A_ub.append(row)
-                stock_min = (producto.demanda_media * cobertura_minima) - producto.stock_inicial
-                b_ub.append(-stock_min)
-
-        A_ub = np.array(A_ub)
-        b_ub = np.array(b_ub)
-
-        # Bounds
-        bounds = []
-        for producto in productos_validos:
-            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
-                min_cajas = 2 * producto.cajas_hora
-                max_cajas = min(
-                    horas_disponibles * producto.cajas_hora,
-                    producto.demanda_media * 60 - producto.stock_inicial
-                )
-                max_cajas = max(min_cajas, max_cajas)
-            else:
-                min_cajas = 0
-                max_cajas = 0
-            bounds.append((min_cajas, max_cajas))
-
-        # Optimización
-        result = linprog(
-            c=coeficientes,
-            A_eq=A_eq,
-            b_eq=b_eq,
-            A_ub=A_ub,
-            b_ub=b_ub,
-            bounds=bounds,
-            method='highs'
-        )
-
-        if result.success:
-            horas_producidas = 0
+        """
+        Aplica el método Simplex en dos fases:
+        1. Optimiza productos urgentes
+        2. Optimiza productos restantes con las horas sobrantes
+        """
+        try:
+            FACTOR_CAPACIDAD_REAL = 0.9
             
-            for i, producto in enumerate(productos_validos):
-                producto.cajas_a_producir = max(0, round(result.x[i]))
-                producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                horas_producidas += producto.horas_necesarias
+            # Fase 1: Identificar productos urgentes
+            productos_urgentes = []
+            productos_normales = []
+            
+            for producto in productos_validos:
+                es_urgente = False
+                if hasattr(producto, 'pedido_urgente') and producto.pedido_urgente:
+                    es_urgente = True
+                elif (isinstance(producto.cobertura_final_est, (int, float)) and 
+                    producto.cobertura_final_est < 3):
+                    es_urgente = True
                 
+                if es_urgente:
+                    productos_urgentes.append(producto)
+                else:
+                    productos_normales.append(producto)
+            
+            logger.info(f"Productos urgentes identificados: {len(productos_urgentes)}")
+            
+            # Fase 1: Optimizar productos urgentes
+            horas_usadas = 0
+            if productos_urgentes:
+                # Calcular horas necesarias mínimas para productos urgentes
+                horas_minimas_urgentes = sum(
+                    2 * FACTOR_CAPACIDAD_REAL for _ in productos_urgentes
+                )
+                
+                if horas_minimas_urgentes > horas_disponibles:
+                    logger.warning(f"No hay suficientes horas para productos urgentes. " +
+                                f"Necesarias: {horas_minimas_urgentes:.2f}, " +
+                                f"Disponibles: {horas_disponibles:.2f}")
+                    # Ajustar proporcionalmente
+                    factor_ajuste = horas_disponibles / horas_minimas_urgentes
+                    for producto in productos_urgentes:
+                        horas_asignadas = 2 * FACTOR_CAPACIDAD_REAL * factor_ajuste
+                        producto.cajas_a_producir = round(horas_asignadas * producto.cajas_hora * FACTOR_CAPACIDAD_REAL)
+                        producto.horas_necesarias = horas_asignadas
+                        horas_usadas += horas_asignadas
+                else:
+                    for producto in productos_urgentes:
+                        # Asignar mínimo 2 horas
+                        producto.horas_necesarias = 2
+                        producto.cajas_a_producir = round(2 * producto.cajas_hora * FACTOR_CAPACIDAD_REAL)
+                        horas_usadas += 2
+            
+            # Fase 2: Optimizar productos normales con horas restantes
+            horas_restantes = max(0, horas_disponibles - horas_usadas)
+            logger.info(f"Horas restantes para productos normales: {horas_restantes:.2f}")
+            
+            if horas_restantes > 0 and productos_normales:
+                n_productos = len(productos_normales)
+                
+                # Función objetivo: priorizar por cobertura inicial
+                coeficientes = []
+                for producto in productos_normales:
+                    if producto.demanda_media > 0:
+                        prioridad = -max(0, 1/producto.cobertura_inicial)  # Negativo para maximizar
+                    else:
+                        prioridad = 0
+                    coeficientes.append(prioridad)
+
+                # Restricción de horas totales
+                A_eq = np.zeros((1, n_productos))
+                A_eq[0] = [1 / (producto.cajas_hora * FACTOR_CAPACIDAD_REAL) 
+                        for producto in productos_normales]
+                b_eq = [horas_restantes]
+
+                # Restricciones por producto
+                A_ub = []
+                b_ub = []
+                bounds = []
+                
+                for producto in productos_normales:
+                    if producto.demanda_media > 0:
+                        cobertura_max = calcular_cobertura_maxima(producto.m_vta_15)
+                        if cobertura_max == float('inf'):
+                            max_cajas = horas_restantes * producto.cajas_hora * FACTOR_CAPACIDAD_REAL
+                        else:
+                            max_cajas = min(
+                                horas_restantes * producto.cajas_hora * FACTOR_CAPACIDAD_REAL,
+                                (producto.demanda_media * cobertura_max) - producto.stock_inicial
+                            )
+                        min_cajas = 2 * producto.cajas_hora * FACTOR_CAPACIDAD_REAL
+                        if max_cajas < min_cajas:
+                            bounds.append((0, 0))  # No producir
+                        else:
+                            bounds.append((min_cajas, max_cajas))
+                    else:
+                        bounds.append((0, 0))
+
+                try:
+                    result = linprog(
+                        c=coeficientes,
+                        A_eq=A_eq,
+                        b_eq=b_eq,
+                        bounds=bounds,
+                        method='highs'
+                    )
+
+                    if result.success:
+                        for i, producto in enumerate(productos_normales):
+                            producto.cajas_a_producir = max(0, round(result.x[i]))
+                            producto.horas_necesarias = producto.cajas_a_producir / (producto.cajas_hora * FACTOR_CAPACIDAD_REAL)
+                            horas_usadas += producto.horas_necesarias
+                    else:
+                        logger.warning("No se pudo optimizar productos normales")
+                except Exception as e:
+                    logger.error(f"Error optimizando productos normales: {str(e)}")
+
+            # Calcular coberturas finales y devolver todos los productos
+            todos_productos = productos_urgentes + productos_normales
+            for producto in todos_productos:
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
                         producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
             
-            logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
-            return productos_validos
-        else:
-            logger.error(f"Error en optimización: {result.message}")
+            logger.info(f"Optimización completada - Horas totales: {horas_usadas:.2f}/{horas_disponibles:.2f}")
+            return todos_productos
+
+        except Exception as e:
+            logger.error(f"Error en optimización: {str(e)}")
+            logger.error(f"Traceback completo: {traceback.format_exc()}")
             return None
-
-    except Exception as e:
-        logger.error(f"Error en Simplex: {str(e)}")
-        return None
-
 def optimizar_orden_grupos(productos):
     """
     Optimiza el orden de los productos minimizando el tiempo perdido en cambios
