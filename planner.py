@@ -242,53 +242,53 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         )
 
         if result.success:
-            horas_producidas = 0
+            horas_redondeadas = 0
             for i, producto in enumerate(productos_validos):
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
-                
-                 # Redondear las horas necesarias a tramos de media hora al alza
+
+                # Redondear las horas necesarias a tramos de media hora al alza
                 producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
 
                 # Recalcular las cajas a producir basadas en las horas redondeadas
                 producto.cajas_a_producir = producto.horas_necesarias * producto.cajas_hora_reales
 
                 # Acumular las horas redondeadas
-                horas_producidas += producto.horas_necesarias
+                horas_redondeadas += producto.horas_necesarias
 
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
-                        producto.stock_inicial + producto.cajas_a_producir
+                    producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
 
             # Verificar que no se superen las horas disponibles
-            if horas_producidas > horas_disponibles:
-                logger.warning(f"Horas planificadas ({horas_producidas:.2f}) superan las horas disponibles ({horas_disponibles:.2f}).")
-                
-                # >>> CAMBIO: Ordenamos los productos por horas asignadas (mayor primero)
-                productos_validos.sort(key=lambda p: p.horas_necesarias, reverse=True)
+            if horas_redondeadas > horas_disponibles:
+                logger.warning(f"Horas planificadas ({horas_redondeadas:.2f}) superan las horas disponibles ({horas_disponibles:.2f}).")
+        
+                # Tomar el producto con más horas asignadas
+                producto_ajustar = max(productos_validos, key=lambda p: p.horas_necesarias)
+                print(f"Antes del ajuste: {producto_ajustar.horas_necesarias}")
 
-                # >>> CAMBIO: Tomamos el producto con más horas asignadas
-                producto_ajustar = productos_validos[0]
-
-                # >>> CAMBIO: Reducir solo el producto con más horas para cuadrar exactamente a horas_disponibles
-                diferencia_horas = horas_producidas - horas_disponibles
+                # Reducir solo el producto con más horas para cuadrar exactamente a horas_disponibles
+                diferencia_horas = horas_redondeadas - horas_disponibles
                 producto_ajustar.horas_necesarias = max(producto_ajustar.horas_necesarias - diferencia_horas, 0)
+                print(f"Después del ajuste: {producto_ajustar.horas_necesarias}")
 
                 # Recalcular su producción de cajas después del ajuste
                 producto_ajustar.cajas_a_producir = producto_ajustar.horas_necesarias * producto_ajustar.cajas_hora_reales
 
-                # >>> CAMBIO: Volver a calcular horas_producidas después del ajuste
-                horas_producidas = sum(producto.horas_necesarias for producto in productos_validos)
-
+                # Recalcular horas_redondeadas después del ajuste
+                horas_redondeadas = sum(producto.horas_necesarias for producto in productos_validos)
+                print(f"Horas redondeadas recalculadas: {horas_redondeadas}")
+                
                 # >>> VERIFICACIÓN FINAL: Asegurar que las horas ajustadas no sobrepasan el límite
-                if horas_producidas > horas_disponibles:
-                    logger.error(f"Error: No se pudo ajustar correctamente. Horas finales: {horas_producidas:.2f}/{horas_disponibles:.2f}")
+                if horas_redondeadas != horas_disponibles:
+                    logger.error(f"Error: No se pudo ajustar correctamente. Horas finales: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
                 else:
-                    logger.info(f"Optimización corregida - Horas finales: {horas_producidas:.2f}/{horas_disponibles:.2f}")
+                    logger.info(f"Optimización corregida - Horas finales: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
 
 
-            logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
+            logger.info(f"Optimización exitosa - Horas planificadas: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
             return productos_validos
         else:
             logger.error(f"Error en optimización: {result.message}")

@@ -5,7 +5,7 @@ from tkcalendar import DateEntry
 from datetime import datetime
 import os
 from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_archivo_existe
-from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos, clasificar_grupos, ordenar_planificacion
+from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -197,16 +197,10 @@ class PlannerGUI:
             
             if not productos_optimizados:
                 raise ValueError("Error en la optimización")
-            
-            # 4.Clasificar y Ordenar la planificación
-            grupo_inicio, grupo_intermedio, grupo_final = clasificar_grupos(
-            productos_optimizados, 'Indicaciones articulos.csv'
-            )
-            productos_ordenados = ordenar_planificacion(grupo_inicio, grupo_intermedio, grupo_final)
-            
+                                  
             # 5. Exportar resultados
             exportar_resultados(
-                productos_ordenados=productos_ordenados,         # Usar la lista ordenada 
+                productos_optimizados=productos_optimizados,         # Usar la lista ordenada 
                 productos=productos,
                 fecha_dataset=fecha_dataset,
                 fecha_planificacion=fecha_inicio,

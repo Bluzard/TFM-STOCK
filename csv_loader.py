@@ -20,16 +20,16 @@ class Producto:
         self.of = self._convertir_float(of)
         self.cajas_hora = self._convertir_float(cajas_hora)
 
-        # Añadir_of_reales (80% de la estimación)
+        # Añadir_of_reales (85% de la estimación)
         if self.of is not None:
-            self.of_reales = self.of * 0.8   # Hay una "merma productiva" del 20% con respecto a la estimación.
+            self.of_reales = self.of * 0.85   # Hay una "merma productiva" del 15% con respecto a la estimación.
         else:
             self.of_reales = None
             logger.error(f"Producto {self.cod_art}: of_reales es None")
 
-        # Añadir cajas_hora_reales (90% de cajas_hora)
+        # Añadir cajas_hora_reales (85% de cajas_hora)
         if self.cajas_hora is not None:
-            self.cajas_hora_reales = self.cajas_hora * 0.9   # Hay una "merma productiva" del 10% con respecto a la estimación.
+            self.cajas_hora_reales = self.cajas_hora * 0.85   # Hay una "merma productiva" del 15% con respecto a la estimación.
         else:
             self.cajas_hora_reales = None
             logger.error(f"Producto {self.cod_art}: cajas_hora es None")  
