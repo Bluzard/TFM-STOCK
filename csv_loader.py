@@ -134,7 +134,7 @@ def leer_indicaciones_articulos():
                     except ValueError:
                         cajas_palet = 40
                     
-                    if info_extra in ['DESCATALOGADO']:
+                    if info_extra in ['DESCATALOGADO', 'PEDIDO']:
                         productos_omitir.add(cod_art)
                     
                     productos_info[cod_art] = {
@@ -160,47 +160,27 @@ def verificar_dataset_existe(nombre_archivo):
         logger.error(f"Error verificando dataset: {str(e)}")
         return False
 def leer_pedidos_pendientes(fecha_dataset):
-    """Lee y valida el archivo de pedidos pendientes"""
     try:
         fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
         archivo_pedidos = f'Pedidos pendientes {fecha_dataset_str}.csv'
         
+        # Verificar si el archivo existe
         if not os.path.exists(archivo_pedidos):
             logger.warning(f"No se encontró el archivo de pedidos: {archivo_pedidos}")
             return None
 
-        # Leer el archivo saltando las dos primeras filas (encabezados no necesarios)
-        df_pedidos = pd.read_csv(archivo_pedidos, 
-                               sep=';', 
-                               encoding='latin1',
-                               skiprows=1)  # Saltar primera fila
+        # Leer el archivo de pedidos
+        df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1')
         
-        # Renombrar las columnas usando la primera fila real de datos
-        # Las fechas estarán en formato DD/MM/YYYY
-        columnas_fechas = [col for col in df_pedidos.columns if '/' in str(col)]
+        # Convertir fechas numéricas
+        fechas_pedidos = [col for col in df_pedidos.columns if col[0:2] in ['09','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31']]
+        df_pedidos[fechas_pedidos] = df_pedidos[fechas_pedidos].apply(pd.to_numeric, errors='coerce').fillna(0)
         
-        # Mantener solo las columnas necesarias: COD_ART y fechas
-        columnas_mantener = ['COD_ART'] + columnas_fechas
-        df_pedidos = df_pedidos[columnas_mantener]
-        
-        # Asegurar que COD_ART sea string
+        # Convertir COD_ART a string
         df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
-        
-        # Convertir columnas de fechas a números y llenar NaN con 0
-        for col in columnas_fechas:
-            df_pedidos[col] = pd.to_numeric(df_pedidos[col], errors='coerce').fillna(0)
-        
-        # Verificar que tenemos datos
-        if df_pedidos.empty:
-            logger.error("No se encontraron datos en el archivo de pedidos")
-            return None
-            
-        logger.info(f"Lectura exitosa de pedidos. Dimensiones: {df_pedidos.shape}")
         
         return df_pedidos
 
     except Exception as e:
         logger.error(f"Error leyendo pedidos pendientes: {str(e)}")
-        import traceback
-        logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None
