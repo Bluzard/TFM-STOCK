@@ -2,6 +2,7 @@ import logging
 from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
+import math
 from scipy.optimize import linprog
 from csv_loader import leer_indicaciones_articulos
 
@@ -32,6 +33,12 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             return None, None
         
         for producto in productos:
+            # Calcular cajas_hora_reales (85% de las cajas por hora teóricas)
+            producto.cajas_hora_reales = producto.cajas_hora * 0.85
+            
+            # Calcular of_reales (85% de las órdenes de fabricación)
+            producto.of_reales = producto.of * 0.85
+            
             # 2. Cálculo de demanda media
             if producto.m_vta_15_aa > 0:
                 variacion_aa = abs(1 - (producto.vta_15_mas_aa / producto.vta_15_aa))
@@ -50,7 +57,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             if producto.primera_of != '(en blanco)':
                 of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
                 if of_date >= fecha_dataset_dt and of_date < fecha_inicio_dt:
-                        producto.disponible = producto.disponible + producto.of
+                        producto.disponible = producto.disponible + producto.of_reales
             
             # 5. Stock Inicial
             producto.stock_inicial = producto.disponible + producto.calidad + producto.stock_externo - producto.demanda_provisoria
@@ -97,6 +104,8 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             # Asignar orden de planificación desde la información adicional
             if producto.cod_art in productos_info:
                 producto.orden_planificacion = productos_info[producto.cod_art].get('orden_planificacion', '')
+            else:
+                producto.orden_planificacion = ''
 
             # Aplicar filtros
             if (producto.cod_art not in productos_omitir and
@@ -119,6 +128,47 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None, None
+
+def calcular_cobertura_maxima(m_vta_15):
+    """
+    Calcula la cobertura máxima basada en m_vta_15, siguiendo la tabla de restricciones.
+    
+    La restricción superior vendrá dada por:
+    M_Vta -15        Cobertura_maxima
+    >=150            14
+    100<=M_Vta -15<150  18
+    50<=M_Vta -15<100   20
+    25<=M_Vta -15<50    30
+    10<=M_Vta -15<25    60
+    <10              120
+    """
+    if m_vta_15 is None or m_vta_15 <= 0:
+        return 120.0  # Valor por defecto para casos extremos
+    
+    if m_vta_15 >= 150:
+        return 14.0
+    elif 100 <= m_vta_15 < 150:
+        return 18.0
+    elif 50 <= m_vta_15 < 100:
+        return 20.0
+    elif 25 <= m_vta_15 < 50:
+        return 30.0
+    elif 10 <= m_vta_15 < 25:
+        return 60.0
+    else:  # < 10
+        return 120.0
+
+def redondear_media_hora_al_alza(horas):
+    """
+    Redondea las horas al múltiplo de 0.5 más cercano, siempre hacia arriba.
+    
+    Ejemplos:
+    - 3.23 -> 3.5
+    - 6.71 -> 7.0
+    - 4.0 -> 4.0
+    - 5.5 -> 5.5
+    """
+    return math.ceil(horas * 2) / 2
 
 def ordenar_productos_para_planificacion(productos):
     """
@@ -155,8 +205,19 @@ def ordenar_productos_para_planificacion(productos):
     
     return productos_ordenados
 
+import logging
+from datetime import date, datetime, timedelta
+import numpy as np
+import pandas as pd
+import math
+from scipy.optimize import linprog
+from csv_loader import leer_indicaciones_articulos
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
-    """Aplica el método Simplex para optimizar la producción"""
+    """Aplica el método Simplex para optimizar la producción con mayor tolerancia a problemas de factibilidad"""
     try:
         # Verificar si hay productos válidos
         if not productos_validos:
@@ -166,84 +227,274 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         n_productos = len(productos_validos)
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
-        # Función objetivo: priorizar productos con menor cobertura
-        coeficientes = []
-        for producto in productos_validos:
-            # Dar mayor peso a productos con cobertura baja o negativa
-            if producto.cobertura_final_est < 0:
-                # Prioridad especial para productos con stock final negativo
-                prioridad = 10 * abs(producto.cobertura_final_est)
-            elif producto.cobertura_inicial < 3:  # Stock por debajo del umbral de seguridad
-                prioridad = 5 * (3 - producto.cobertura_inicial)
-            else:
-                prioridad = max(0, 1/producto.cobertura_inicial)
-                
-            coeficientes.append(-prioridad)  # Negativo porque buscamos maximizar la prioridad
-
-        # Restricciones de horas disponibles
-        A_eq = np.zeros((1, n_productos))
-        A_eq[0] = [1 / producto.cajas_hora for producto in productos_validos]
-        b_eq = [horas_disponibles]
-
-        # Restricciones de stock mínimo
-        A_ub = []
-        b_ub = []
+        # Identificar productos que realmente necesitan producción
+        productos_a_planificar = []
         for i, producto in enumerate(productos_validos):
-            row = [0] * n_productos
-            row[i] = -1
-            A_ub.append(row)
-            stock_min = max(0, (producto.demanda_media * cobertura_minima) - producto.stock_inicial)
-            b_ub.append(-stock_min)
-
-        A_ub = np.array(A_ub)
-        b_ub = np.array(b_ub)
-
-        # Bounds: límites de producción para cada producto
-        bounds = []
-        for producto in productos_validos:
-            if producto.demanda_media > 0 and producto.cobertura_inicial < 30:
-                # Mínimo 2 horas de producción para cada artículo planificado
-                min_cajas = 2 * producto.cajas_hora
-                
-                # Producción máxima: no exceder 60 días de cobertura
-                max_dias_cobertura = 60
-                stock_objetivo = producto.demanda_media * max_dias_cobertura
-                max_cajas = max(
-                    min_cajas,  # Al menos el mínimo de cajas
-                    min(
-                        horas_disponibles * producto.cajas_hora,  # No exceder capacidad total
-                        stock_objetivo - producto.stock_inicial  # No exceder stock objetivo
-                    )
-                )
-            else:
-                min_cajas = 0
-                max_cajas = 0
-            bounds.append((min_cajas, max_cajas))
-
-        # Optimización
-        result = linprog(
-            c=coeficientes,
-            A_eq=A_eq,
-            b_eq=b_eq,
-            A_ub=A_ub,
-            b_ub=b_ub,
-            bounds=bounds,
-            method='highs'
-        )
-
-        if result.success:
-            horas_producidas = 0
+            # Calcular cobertura máxima basada en la demanda media
+            cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
             
-            for i, producto in enumerate(productos_validos):
-                producto.cajas_a_producir = max(0, round(result.x[i]))
-                producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora
-                horas_producidas += producto.horas_necesarias
+            # Calcular mínimo y máximo de cajas a producir
+            min_cajas = 2 * producto.cajas_hora_reales  # Mínimo 2 horas de producción
+            
+            # Máximo de cajas basado en la cobertura máxima
+            max_cajas_cobertura = (producto.demanda_media * cobertura_maxima) - producto.stock_inicial
+            
+            # Si el máximo es negativo (ya tenemos más stock que la cobertura máxima), no planificar
+            if max_cajas_cobertura <= 0 and producto.cobertura_final_est >= 0:
+                continue  # No necesita producción
+                
+            # El máximo no puede exceder la capacidad disponible
+            max_cajas_capacidad = horas_disponibles * producto.cajas_hora_reales
+            
+            # Tomar el mínimo entre la cobertura máxima y la capacidad disponible
+            max_cajas = min(max_cajas_cobertura, max_cajas_capacidad)
+            
+            # Si el máximo es menor que el mínimo, considerar ajustes especiales
+            if max_cajas < min_cajas:
+                if producto.cobertura_final_est < 0:
+                    # Prioridad absoluta a productos con cobertura negativa
+                    max_cajas = min_cajas
+                    productos_a_planificar.append((i, producto.cod_art, min_cajas, max_cajas, True))  # True indica prioridad
+                elif producto.cobertura_inicial < 3:
+                    # Prioridad a productos con baja cobertura
+                    max_cajas = min_cajas
+                    productos_a_planificar.append((i, producto.cod_art, min_cajas, max_cajas, False))
+            elif max_cajas > 0:
+                # Producto normal que necesita producción
+                productos_a_planificar.append((i, producto.cod_art, min_cajas, max_cajas, False))
+            
+            # Log para verificar valores
+            logger.info(f"Producto {producto.cod_art}: m_vta_15={producto.m_vta_15:.2f}, cobertura_maxima={cobertura_maxima:.2f}")
+            logger.info(f"Producto {producto.cod_art}: min_cajas={min_cajas:.2f}, max_cajas={max_cajas:.2f}")
+
+        # Verificar si hay productos a planificar
+        if not productos_a_planificar:
+            logger.warning("No hay productos que requieran planificación")
+            return productos_validos
+            
+        logger.info(f"Productos a planificar: {len(productos_a_planificar)}")
+        for idx, cod_art, min_c, max_c, es_prioritario in productos_a_planificar:
+            prioridad = "PRIORITARIO" if es_prioritario else ""
+            logger.info(f"  {idx}: {cod_art} - min: {min_c:.2f}, max: {max_c:.2f} {prioridad}")
+
+        # Verificar si hay demasiadas restricciones conflictivas
+        total_min_horas = sum(min_c/productos_validos[idx].cajas_hora_reales 
+                            for idx, _, min_c, _, _ in productos_a_planificar)
+        
+        logger.info(f"Total horas mínimas requeridas: {total_min_horas:.2f}")
+        logger.info(f"Horas disponibles: {horas_disponibles:.2f}")
+        
+        if total_min_horas > horas_disponibles * 1.05:  # Permitir un pequeño margen
+            logger.warning(f"Restricciones conflictivas: Total horas mínimas ({total_min_horas:.2f}) > Horas disponibles ({horas_disponibles:.2f})")
+            logger.info("Realizando asignación manual basada en prioridades")
+            
+            # Ordenar productos por prioridad
+            productos_a_planificar.sort(key=lambda p: (
+                0 if p[4] else 1,  # Primero los prioritarios
+                productos_validos[p[0]].cobertura_inicial  # Luego por cobertura
+            ))
+            
+            # Asignar horas manualmente
+            horas_restantes = horas_disponibles
+            for idx, cod_art, min_cajas, max_cajas, _ in productos_a_planificar:
+                producto = productos_validos[idx]
+                
+                # Si es un producto prioritario o tenemos suficientes horas
+                min_horas = min_cajas / producto.cajas_hora_reales
+                
+                if min_horas <= horas_restantes:
+                    # Podemos asignar al menos el mínimo
+                    horas_asignadas = min_horas
+                    horas_restantes -= horas_asignadas
+                else:
+                    # No podemos cumplir ni el mínimo, asignar lo que queda
+                    horas_asignadas = 0 if horas_restantes < 1 else horas_restantes
+                    horas_restantes = 0
+                
+                # Redondear a media hora
+                horas_asignadas = redondear_media_hora_al_alza(horas_asignadas)
+                
+                # Calcular cajas y actualizar producto
+                producto.horas_necesarias = horas_asignadas
+                producto.cajas_a_producir = round(horas_asignadas * producto.cajas_hora_reales)
                 
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
                         producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
+                
+                logger.info(f"Asignación manual: {producto.cod_art} - {horas_asignadas:.2f} horas - {producto.cajas_a_producir} cajas")
+                
+                if horas_restantes <= 0:
+                    break
             
+            logger.info(f"Asignación manual completada. Horas restantes: {horas_restantes:.2f}")
+            return productos_validos
+            
+        # Si llegamos aquí, intentamos la optimización lineal
+        # Preparar los parámetros para el método simplex
+        coeficientes = np.zeros(n_productos)
+        bounds = [(0, 0) for _ in range(n_productos)]
+        
+        # Llenar solo para productos a planificar
+        for i, cod_art, min_cajas, max_cajas, es_prioritario in productos_a_planificar:
+            if es_prioritario:
+                # Dar mucho peso a productos prioritarios
+                coeficientes[i] = -100
+            elif productos_validos[i].cobertura_final_est < 0:
+                # Prioridad a productos con cobertura negativa
+                coeficientes[i] = -10
+            else:
+                # Prioridad inversamente proporcional a la cobertura
+                coeficientes[i] = -1 / max(1, productos_validos[i].cobertura_inicial)
+            
+            bounds[i] = (min_cajas, max_cajas)
+        
+        # Definir restricción de horas totales como desigualdad en lugar de igualdad
+        # Esto da más flexibilidad al solver
+        A_ub = np.zeros((1, n_productos))
+        A_ub[0] = [1 / producto.cajas_hora_reales for producto in productos_validos]
+        b_ub = [horas_disponibles]
+        
+        try:
+            # Intentar optimización con restricción de horas como desigualdad
+            result = linprog(
+                c=coeficientes,
+                A_ub=A_ub,
+                b_ub=b_ub,
+                bounds=bounds,
+                method='highs'
+            )
+            
+            if not result.success:
+                # Si falla, intentar sin ninguna restricción excepto las bounds
+                logger.warning(f"Primera optimización falló: {result.message}. Intentando sin restricciones globales.")
+                result = linprog(
+                    c=coeficientes,
+                    bounds=bounds,
+                    method='highs'
+                )
+        except Exception as e:
+            logger.error(f"Error en optimización: {str(e)}")
+            logger.warning("Implementando asignación manual simplificada")
+            
+            # Asignar solo los mínimos para productos prioritarios
+            for i, producto in enumerate(productos_validos):
+                producto.cajas_a_producir = 0
+                producto.horas_necesarias = 0
+            
+            # Encontrar productos prioritarios
+            productos_prioritarios = [p for p in productos_a_planificar if p[4]]
+            if not productos_prioritarios:
+                # Si no hay prioritarios, usar los de menor cobertura
+                productos_a_planificar.sort(key=lambda p: productos_validos[p[0]].cobertura_inicial)
+                productos_prioritarios = productos_a_planificar[:min(5, len(productos_a_planificar))]
+            
+            # Asignar horas
+            horas_restantes = horas_disponibles
+            for idx, cod_art, min_cajas, _, _ in productos_prioritarios:
+                producto = productos_validos[idx]
+                min_horas = min_cajas / producto.cajas_hora_reales
+                
+                if min_horas <= horas_restantes:
+                    producto.horas_necesarias = redondear_media_hora_al_alza(min_horas)
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                    horas_restantes -= producto.horas_necesarias
+                else:
+                    break
+            
+            # Crear un resultado ficticio
+            class DummyResult:
+                def __init__(self):
+                    self.success = True
+                    self.x = np.zeros(n_productos)
+            
+            result = DummyResult()
+            for i, producto in enumerate(productos_validos):
+                result.x[i] = producto.cajas_a_producir
+            
+        if result.success:
+            # Procesar resultados
+            horas_producidas = 0
+            
+            for i, producto in enumerate(productos_validos):
+                producto.cajas_a_producir = max(0, round(result.x[i]))
+                producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                
+                # Redondear las horas necesarias a tramos de media hora al alza
+                if producto.horas_necesarias > 0:
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                    # Recalcular las cajas a producir basadas en las horas redondeadas
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                
+                horas_producidas += producto.horas_necesarias
+                
+                # Calcular cobertura final
+                if producto.demanda_media > 0 and producto.cajas_a_producir > 0:
+                    producto.cobertura_final_plan = (
+                        producto.stock_inicial + producto.cajas_a_producir
+                    ) / producto.demanda_media
+            
+            # Verificar que no se superen las horas disponibles
+            if horas_producidas > horas_disponibles * 1.05:  # Permitir un pequeño margen
+                logger.warning(f"Horas planificadas ({horas_producidas:.2f}) superan las horas disponibles ({horas_disponibles:.2f}).")
+                
+                # Ajustar el plan para no exceder las horas disponibles
+                exceso_horas = horas_producidas - horas_disponibles
+                
+                # Ordenar productos por prioridad (menor cobertura = mayor prioridad)
+                productos_ordenados = sorted(
+                    [(i, p) for i, p in enumerate(productos_validos) if p.horas_necesarias > 0], 
+                    key=lambda x: (
+                        0 if x[1].cobertura_final_est < 0 else 1,  # Primero negativos
+                        x[1].cobertura_inicial  # Luego por cobertura inicial
+                    )
+                )
+                
+                # Calcular cuánto reducir de cada producto (proporcionalmente)
+                total_a_reducir = exceso_horas
+                for i, producto in reversed(productos_ordenados):
+                    # Saltamos productos prioritarios (cobertura negativa)
+                    if producto.cobertura_final_est < 0:
+                        continue
+                        
+                    # Cálculo proporcional
+                    factor_reduccion = producto.horas_necesarias / horas_producidas
+                    reduccion_propuesta = exceso_horas * factor_reduccion
+                    
+                    # Asegurar que no quede por debajo del mínimo de 2 horas
+                    reduccion_maxima = max(0, producto.horas_necesarias - 2.0)
+                    reduccion = min(reduccion_propuesta, reduccion_maxima)
+                    
+                    # Aplicar reducción
+                    if reduccion > 0:
+                        producto.horas_necesarias -= reduccion
+                        producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                        producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                        total_a_reducir -= reduccion
+                        
+                        if producto.demanda_media > 0:
+                            producto.cobertura_final_plan = (
+                                producto.stock_inicial + producto.cajas_a_producir
+                            ) / producto.demanda_media
+                    
+                    if total_a_reducir <= 0:
+                        break
+                
+                # Recalcular horas totales
+                horas_producidas = sum(p.horas_necesarias for p in productos_validos)
+                
+                logger.info(f"Plan ajustado: {horas_producidas:.2f} horas planificadas.")
+            
+            # Resumen final
+            horas_por_grupo = {}
+            for p in productos_validos:
+                if p.horas_necesarias > 0:
+                    horas_por_grupo[p.cod_gru] = horas_por_grupo.get(p.cod_gru, 0) + p.horas_necesarias
+            
+            for grupo, horas in horas_por_grupo.items():
+                logger.info(f"Grupo {grupo}: {horas:.2f} horas")
+                
             logger.info(f"Optimización exitosa - Horas planificadas: {horas_producidas:.2f}/{horas_disponibles:.2f}")
             return productos_validos
         else:
@@ -255,53 +506,79 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
+    
+def calcular_cobertura_maxima(m_vta_15):
+    """
+    Calcula la cobertura máxima basada en m_vta_15, siguiendo la tabla de restricciones.
+    
+    La restricción superior vendrá dada por:
+    M_Vta -15        Cobertura_maxima
+    >=150            14
+    100<=M_Vta -15<150  18
+    50<=M_Vta -15<100   20
+    25<=M_Vta -15<50    30
+    10<=M_Vta -15<25    60
+    <10              120
+    """
+    if m_vta_15 is None or m_vta_15 <= 0:
+        return 120.0  # Valor por defecto para casos extremos
+    
+    if m_vta_15 >= 150:
+        return 14.0
+    elif 100 <= m_vta_15 < 150:
+        return 18.0
+    elif 50 <= m_vta_15 < 100:
+        return 20.0
+    elif 25 <= m_vta_15 < 50:
+        return 30.0
+    elif 10 <= m_vta_15 < 25:
+        return 60.0
+    else:  # < 10
+        return 120.0
 
-def calcular_ocupacion_almacen(productos, productos_info):
+def redondear_media_hora_al_alza(horas):
     """
-    Calcula métricas de ocupación de almacén
+    Redondea las horas al múltiplo de 0.5 más cercano, siempre hacia arriba.
     
-    :param productos: Lista de productos producidos
-    :param productos_info: Diccionario con información adicional de productos
-    :return: Diccionario con métricas de ocupación
+    Ejemplos:
+    - 3.23 -> 3.5
+    - 6.71 -> 7.0
+    - 4.0 -> 4.0
+    - 5.5 -> 5.5
     """
-    total_palets = 0
-    total_stock = 0
-    
-    for producto in productos:
-        # Obtener cajas por palet, usar 40 como valor por defecto
-        cajas_palet = productos_info.get(producto.cod_art, {}).get('cajas_palet', 40)
+    return math.ceil(horas * 2) / 2
+
+def optimizar_orden_grupos(productos):
+    """
+    Optimiza el orden de los productos minimizando el tiempo perdido en cambios
+    entre grupos MEC y VIME.
+    """
+    if not productos:
+        return []
         
-        # Calcular stock total (inicial + producido)
-        stock_total = producto.stock_inicial + getattr(producto, 'cajas_a_producir', 0)
-        
-        # Calcular número de palets
-        palets_producto = stock_total / cajas_palet
-        
-        total_palets += palets_producto
-        total_stock += stock_total
+    # Separar productos por grupo
+    mec_products = [p for p in productos if p.cod_gru == 'MEC']
+    vime_products = [p for p in productos if p.cod_gru == 'VIME']
     
-    # Métricas de penalización según documento original
-    penalizacion = 0
-    if total_palets > 1200:
-        penalizacion = -100
-    elif total_palets > 1000:
-        penalizacion = -50
-    elif total_palets > 800:
-        penalizacion = -10
+    # Si solo hay productos de un grupo, mantener ese orden
+    if not mec_products or not vime_products:
+        return productos
+        
+    # Ordenar cada grupo por cobertura
+    mec_products.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+    vime_products.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
     
-    return {
-        'total_palets': round(total_palets, 2),
-        'total_stock': round(total_stock, 2),
-        'penalizacion_espacio': penalizacion
-    }
+    # Decidir qué grupo va primero basado en los tiempos de setup
+    # VIME -> MEC = 8 min
+    # MEC -> VIME = 10 min
+    # Por lo tanto, es mejor empezar con VIME si hay productos de ambos grupos
+    ordered_products = vime_products + mec_products
+    
+    return ordered_products
 
 def ordenar_productos(df):
     """
-    Ordena el DataFrame de productos según los criterios especificados:
-    1. Estado (Planificado > Válido sin producción > No válido)
-    2. Orden de planificación (INICIO > vacío > FINAL)
-    3. Cobertura (prioridad a cobertura final estimada negativa, luego cobertura inicial baja)
-    4. COD_GRU (agrupar por familia de productos)
+    Ordena el DataFrame de productos según los criterios especificados
     """
     # Definir orden de prioridad para Estado
     df['orden_estado'] = df['Estado'].map({
@@ -315,22 +592,31 @@ def ordenar_productos(df):
         'INICIO': 0,
         '': 1,
         'FINAL': 2
-    }).fillna(1)  # Valores no reconocidos se tratan como prioridad media (1)
+    }).fillna(1)
     
-    # Procesar la Cobertura_Final_Est para la ordenación
-    df['cobertura_negativa'] = df['Cobertura_Final_Est'] < 0
+    # Definir orden para COD_GRU
+    df['orden_grupo'] = df['COD_GRU'].map({
+        'VIME': 0,
+        'MEC': 1
+    })
     
-    # Convertir coberturas a valores numéricos asegurando que sean comparables
-    df['Cobertura_Inicial_Num'] = pd.to_numeric(df['Cobertura_Inicial'], errors='coerce').fillna(float('inf'))
+    # Asegurar que Cobertura_Inicial sea numérica
+    df['Cobertura_Sort'] = pd.to_numeric(df['Cobertura_Inicial'], errors='coerce').fillna(float('inf'))
+    
+    # Dar prioridad extra a productos con cobertura final estimada negativa
+    mask_negativa = df['Cobertura_Final_Est'] < 0
+    df.loc[mask_negativa, 'Cobertura_Sort'] = -1
     
     # Ordenar el DataFrame
-    df_ordenado = df.sort_values(
-        by=['orden_estado', 'orden_planificacion', 'cobertura_negativa', 'Cobertura_Inicial_Num', 'COD_GRU'],
-        ascending=[True, True, False, True, True]  # False para cobertura_negativa para poner True primero
-    )
+    df_ordenado = df.sort_values([
+        'orden_estado',
+        'orden_planificacion',
+        'orden_grupo',
+        'Cobertura_Sort'
+    ])
     
     # Eliminar columnas temporales de ordenamiento
-    df_ordenado = df_ordenado.drop(['orden_estado', 'orden_planificacion', 'cobertura_negativa', 'Cobertura_Inicial_Num'], axis=1)
+    df_ordenado = df_ordenado.drop(['orden_estado', 'orden_planificacion', 'orden_grupo', 'Cobertura_Sort'], axis=1)
     
     return df_ordenado
 
@@ -370,7 +656,7 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
                 if producto.primera_of != '(en blanco)':
                     of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
                     if of_date <= fecha_actual:
-                        stock_previsto += producto.of
+                        stock_previsto += producto.of_reales
 
                 # Restar los pedidos del día
                 if fecha_str in df_pedidos.columns:
@@ -399,6 +685,45 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return []
+    
+def calcular_ocupacion_almacen(productos, productos_info):
+    """
+    Calcula métricas de ocupación de almacén
+    
+    :param productos: Lista de productos producidos
+    :param productos_info: Diccionario con información adicional de productos
+    :return: Diccionario con métricas de ocupación
+    """
+    total_palets = 0
+    total_stock = 0
+    
+    for producto in productos:
+        # Obtener cajas por palet, usar 40 como valor por defecto
+        cajas_palet = productos_info.get(producto.cod_art, {}).get('cajas_palet', 40)
+        
+        # Calcular stock total (inicial + producido)
+        stock_total = producto.stock_inicial + getattr(producto, 'cajas_a_producir', 0)
+        
+        # Calcular número de palets
+        palets_producto = stock_total / cajas_palet
+        
+        total_palets += palets_producto
+        total_stock += stock_total
+    
+    # Métricas de penalización según documento original
+    penalizacion = 0
+    if total_palets > 1200:
+        penalizacion = -100
+    elif total_palets > 1000:
+        penalizacion = -50
+    elif total_palets > 800:
+        penalizacion = -10
+    
+    return {
+        'total_palets': round(total_palets, 2),
+        'total_stock': round(total_stock, 2),
+        'penalizacion_espacio': penalizacion
+    }
 
 def calcular_penalizacion_espacio(palets):
     """Calcula la penalización por espacio ocupado"""
@@ -478,52 +803,11 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                     'Cobertura_Final': round(cobertura_final, 2) if cobertura_final != float('inf') else 0,
                     'Cobertura_Final_Est': round(cobertura_final_est, 2),
                     'Total_Palets': round(palets, 2),
-                    'Total_Stock': round(stock_total, 2)
+                    'Total_Stock': round(stock_total, 2),
+                    'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
                 })
-                
-        # Calcular penalización global por ocupación de espacio
-        penalizacion_espacio = calcular_penalizacion_espacio(total_palets)
-        
-        # Añadir penalización a todos los registros
-        for dato in datos:
-            dato['Penalizacion_Espacio'] = penalizacion_espacio
-            
-        # Convertir a DataFrame
-        df = pd.DataFrame(datos)
-        
-        # Aplicar el ordenamiento mejorado
-        df_ordenado = ordenar_productos(df)
-        
-        # Generar nombre de archivo y exportar
-        if isinstance(fecha_dataset, (datetime, date)):
-            fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
-        else:
-            fecha_dataset_str = fecha_dataset
-            
-        if isinstance(fecha_planificacion, (datetime, date)):
-            fecha_planificacion_str = fecha_planificacion.strftime('%d-%m-%Y')
-        else:
-            fecha_planificacion_str = fecha_planificacion
-            
-        nombre_archivo = f"planificacion_fd{fecha_dataset_str}_fi{fecha_planificacion_str}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
-        df_ordenado.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
-        
-        logger.info(f"Resultados exportados a {nombre_archivo}")
-        logger.info(f"Total palets: {total_palets:.2f}, Penalización por espacio: {penalizacion_espacio}")
-        
-        # Mostrar resumen de planificación
-        productos_planificados = df[df['Estado'] == 'Planificado']
-        logger.info(f"Productos planificados: {len(productos_planificados)}")
-        logger.info(f"Horas totales asignadas: {productos_planificados['Horas_Necesarias'].sum():.2f}")
-        
-        # Verificar productos con cobertura negativa que no se planificaron
-        cobertura_negativa_no_planificada = df[(df['Cobertura_Final_Est'] < 0) & (df['Estado'] != 'Planificado')]
-        if not cobertura_negativa_no_planificada.empty:
-            logger.warning(f"Hay {len(cobertura_negativa_no_planificada)} productos con cobertura final estimada negativa que no se planificaron")
-            for _, row in cobertura_negativa_no_planificada.iterrows():
-                logger.warning(f"  {row['COD_ART']} - {row['NOM_ART']} - Cobertura Final Est: {row['Cobertura_Final_Est']}")
-        
     except Exception as e:
-        logger.error(f"Error exportando resultados: {str(e)}")
+        logger.error(f"Error al exportar resultados: {str(e)}")
         import traceback
-        logger.error(f"Traceback completo: {traceback.format_exc()}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
