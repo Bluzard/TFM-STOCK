@@ -39,6 +39,10 @@ class Producto:
         # Campo de orden de planificación
         self.orden_planificacion = orden_planificacion
         
+        # Ajuste de producción real (85% de la teórica)
+        self.cajas_hora_reales = self.cajas_hora * 0.85
+        self.of_reales = self.of * 0.85
+        
         # Campos calculados (inicialmente 0)
         self.demanda_media = 0
         self.stock_inicial = 0
@@ -113,9 +117,13 @@ def leer_indicaciones_articulos():
                 
                 # Usar 'cj/palet' en lugar de 'CAJAS_PALET'
                 idx_cajas_palet = header.index('cj/palet') 
-            except ValueError:
-                logger.error("No se encontraron las columnas requeridas en el archivo de indicaciones")
-                return {}, set()
+            except ValueError as e:
+                logger.error(f"No se encontraron todas las columnas requeridas en el archivo de indicaciones: {str(e)}")
+                # Intentar con valores por defecto si no se encuentran todas las columnas
+                idx_info = header.index('Info extra') if 'Info extra' in header else -1
+                idx_cod = header.index('COD_ART') if 'COD_ART' in header else 0
+                idx_orden = header.index('ORDEN PLANIFICACION') if 'ORDEN PLANIFICACION' in header else -1
+                idx_cajas_palet = header.index('cj/palet') if 'cj/palet' in header else -1
             
             productos_omitir = set()
             for linea in file:
@@ -123,25 +131,33 @@ def leer_indicaciones_articulos():
                     continue
                     
                 campos = linea.strip().split(';')
-                if len(campos) > max(idx_info, idx_cod, idx_orden, idx_cajas_palet):
-                    info_extra = campos[idx_info].strip()
-                    cod_art = campos[idx_cod].strip()
-                    orden = campos[idx_orden].strip() if idx_orden < len(campos) else ''
-                    
-                    # Convertir cajas por palet a entero, con valor por defecto
-                    try:
-                        cajas_palet = int(campos[idx_cajas_palet]) if campos[idx_cajas_palet].strip() else 40
-                    except ValueError:
-                        cajas_palet = 40
-                    
-                    if info_extra in ['DESCATALOGADO']:
-                        productos_omitir.add(cod_art)
-                    
-                    productos_info[cod_art] = {
-                        'info_extra': info_extra,
-                        'orden_planificacion': orden,
-                        'cajas_palet': cajas_palet
-                    }
+                
+                # Verificar que hay suficientes campos
+                if len(campos) <= max(idx for idx in [idx_cod, idx_info, idx_orden, idx_cajas_palet] if idx >= 0):
+                    continue
+                
+                cod_art = campos[idx_cod].strip()
+                
+                # Extraer información si es posible
+                info_extra = campos[idx_info].strip() if idx_info >= 0 and idx_info < len(campos) else ''
+                orden = campos[idx_orden].strip() if idx_orden >= 0 and idx_orden < len(campos) else ''
+                
+                # Convertir cajas por palet a entero, con valor por defecto
+                try:
+                    cajas_palet = int(campos[idx_cajas_palet]) if (idx_cajas_palet >= 0 and 
+                                                                 idx_cajas_palet < len(campos) and 
+                                                                 campos[idx_cajas_palet].strip()) else 40
+                except ValueError:
+                    cajas_palet = 40
+                
+                if info_extra in ['DESCATALOGADO', 'PEDIDO']:
+                    productos_omitir.add(cod_art)
+                
+                productos_info[cod_art] = {
+                    'info_extra': info_extra,
+                    'orden_planificacion': orden,
+                    'cajas_palet': cajas_palet
+                }
         
         logger.info(f"Información de productos cargada: {len(productos_info)}")
         return productos_info, productos_omitir
@@ -159,28 +175,201 @@ def verificar_dataset_existe(nombre_archivo):
     except Exception as e:
         logger.error(f"Error verificando dataset: {str(e)}")
         return False
-def leer_pedidos_pendientes(fecha_dataset):
-    try:
-        fecha_dataset_str = fecha_dataset.strftime('%d-%m-%y')
-        archivo_pedidos = f'Pedidos pendientes {fecha_dataset_str}.csv'
-        
-        # Verificar si el archivo existe
-        if not os.path.exists(archivo_pedidos):
-            logger.warning(f"No se encontró el archivo de pedidos: {archivo_pedidos}")
-            return None
 
-        # Leer el archivo de pedidos
-        df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1')
+def leer_pedidos_pendientes(fecha_dataset):
+    """
+    Lee y procesa el archivo de pedidos pendientes con formato específico "Pedidos pendientes DD-MM-YY".
+    
+    Args:
+        fecha_dataset: Fecha del dataset (datetime o string en formato DD-MM-YY)
         
-        # Convertir fechas numéricas
-        fechas_pedidos = [col for col in df_pedidos.columns if col[0:2] in ['09','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30','31']]
-        df_pedidos[fechas_pedidos] = df_pedidos[fechas_pedidos].apply(pd.to_numeric, errors='coerce').fillna(0)
+    Returns:
+        DataFrame con los pedidos pendientes procesados, o None si hay un error
+    """
+    try:
+        # Formatear la fecha para el nombre de archivo
+        if isinstance(fecha_dataset, datetime):
+            fecha_str = fecha_dataset.strftime('%d-%m-%y')
+        else:
+            # Si ya es string, normalizar formato
+            fecha_str = fecha_dataset
+            
+            # Intentar convertir si el formato es DD-MM-YYYY
+            if len(fecha_str.split('-')[2]) == 4:  # Año con 4 dígitos
+                fecha_dt = datetime.strptime(fecha_str, '%d-%m-%Y')
+                fecha_str = fecha_dt.strftime('%d-%m-%y')
         
-        # Convertir COD_ART a string
+        # Nombre de archivo esperado (formato exacto)
+        archivo_pedidos = f'Pedidos pendientes {fecha_str}'
+        
+        # Comprobar si existe con diferentes extensiones
+        for ext in ['.csv', '.txt']:
+            if os.path.exists(archivo_pedidos + ext):
+                archivo_pedidos = archivo_pedidos + ext
+                break
+        
+        # Si no encontramos el archivo, buscar alternativas
+        if not os.path.exists(archivo_pedidos):
+            # Intentar con otros formatos de fecha
+            alternativas = []
+            
+            # Probar sin guiones
+            fecha_sin_guiones = fecha_str.replace('-', '')
+            alternativas.append(f'Pedidos pendientes {fecha_sin_guiones}')
+            
+            # Probar con diferentes separadores
+            for sep in ['_', ' ']:
+                alternativas.append(f'Pedidos{sep}pendientes{sep}{fecha_str}')
+                alternativas.append(f'Pedidos{sep}pendientes{sep}{fecha_sin_guiones}')
+            
+            # Verificar cada alternativa
+            for alt in alternativas:
+                for ext in ['.csv', '.txt']:
+                    if os.path.exists(alt + ext):
+                        archivo_pedidos = alt + ext
+                        break
+                if os.path.exists(archivo_pedidos):
+                    break
+            
+            # Si todavía no existe, buscar cualquier archivo de pedidos
+            if not os.path.exists(archivo_pedidos):
+                for archivo in os.listdir('.'):
+                    if archivo.startswith('Pedidos pendientes') and (archivo.endswith('.csv') or archivo.endswith('.txt')):
+                        archivo_pedidos = archivo
+                        break
+        
+        # Verificar si se encontró un archivo
+        if not os.path.exists(archivo_pedidos):
+            logger.warning(f"No se encontró el archivo de pedidos pendientes para la fecha {fecha_str}")
+            return None
+            
+        logger.info(f"Leyendo archivo de pedidos pendientes: {archivo_pedidos}")
+        
+        # Detectar qué formato tiene el archivo
+        with open(archivo_pedidos, 'r', encoding='latin1') as f:
+            primera_linea = f.readline().strip()
+            
+        # Determinar separador
+        if '\t' in primera_linea:
+            separador = '\t'
+        elif ';' in primera_linea:
+            separador = ';'
+        else:
+            separador = ','
+            
+        # Leer según el formato detectado
+        try:
+            df_pedidos = pd.read_csv(archivo_pedidos, sep=separador, encoding='latin1')
+        except Exception as e:
+            logger.warning(f"Error leyendo con separador '{separador}': {str(e)}")
+            try:
+                # Intentar con otro separador
+                otro_separador = '\t' if separador != '\t' else ';'
+                df_pedidos = pd.read_csv(archivo_pedidos, sep=otro_separador, encoding='latin1')
+            except Exception as e2:
+                logger.error(f"No se pudo leer el archivo con ningún separador estándar: {str(e2)}")
+                # Leer como texto plano
+                with open(archivo_pedidos, 'r', encoding='latin1') as f:
+                    lineas = f.readlines()
+                
+                # Encontrar las columnas de fechas (formato DD/MM/YYYY o similar)
+                headers = lineas[0].strip().split(separador)
+                
+                # Buscar columna de COD_ART o similar
+                cod_art_col = None
+                for i, h in enumerate(headers):
+                    if 'COD' in h or 'ART' in h or 'codigo' in h.lower() or 'código' in h.lower():
+                        cod_art_col = i
+                        break
+                
+                if cod_art_col is None:
+                    logger.error("No se pudo identificar la columna de código de artículo")
+                    return None
+                
+                # Crear datos manualmente
+                data = {'COD_ART': []}
+                fecha_cols = []
+                
+                # Identificar columnas de fechas
+                for i, h in enumerate(headers):
+                    if i != cod_art_col and not h.startswith('Suma') and not h.startswith('Total'):
+                        try:
+                            # Intentar interpretar como fecha
+                            datetime.strptime(h, '%d/%m/%Y')
+                            fecha_cols.append(i)
+                            data[h] = []
+                        except:
+                            try:
+                                # Otro formato de fecha
+                                datetime.strptime(h, '%d/%m/%y')
+                                fecha_cols.append(i)
+                                data[h] = []
+                            except:
+                                # No es fecha, pero podría ser una columna importante
+                                if h.strip():
+                                    data[h] = []
+                
+                # Procesar datos
+                for linea in lineas[1:]:
+                    if not linea.strip():
+                        continue
+                    
+                    campos = linea.strip().split(separador)
+                    if len(campos) <= cod_art_col:
+                        continue
+                    
+                    # Añadir código de artículo
+                    data['COD_ART'].append(campos[cod_art_col])
+                    
+                    # Añadir valores de fechas (cantidades)
+                    for i, col in enumerate(headers):
+                        if i in fecha_cols and col in data:
+                            if i < len(campos):
+                                try:
+                                    # Convertir a número negativo (pedidos son negativos)
+                                    valor = float(campos[i])
+                                    data[col].append(valor)
+                                except:
+                                    data[col].append(0)
+                            else:
+                                data[col].append(0)
+                
+                # Crear DataFrame
+                df_pedidos = pd.DataFrame(data)
+        
+        # Verificar columnas y ajustar si es necesario
+        if 'COD_ART' not in df_pedidos.columns:
+            # Buscar columna alternativa
+            for col in df_pedidos.columns:
+                if 'cod' in col.lower() or 'art' in col.lower() or 'código' in col.lower() or 'codigo' in col.lower():
+                    df_pedidos.rename(columns={col: 'COD_ART'}, inplace=True)
+                    break
+            else:
+                # Si no se encuentra, usar la primera columna no numérica
+                for col in df_pedidos.columns:
+                    if df_pedidos[col].dtype == 'object':
+                        df_pedidos.rename(columns={col: 'COD_ART'}, inplace=True)
+                        break
+        
+        # Convertir valores de fechas a números negativos (pedidos)
+        for col in df_pedidos.columns:
+            if col != 'COD_ART' and col != 'NOM_ART':
+                try:
+                    df_pedidos[col] = pd.to_numeric(df_pedidos[col], errors='coerce').fillna(0)
+                except:
+                    pass
+        
+        # Asegurar que COD_ART sea string
         df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
         
+        # Mostrar información del resultado
+        logger.info(f"Pedidos pendientes cargados: {len(df_pedidos)} productos")
+        logger.info(f"Columnas de fechas: {[col for col in df_pedidos.columns if col not in ['COD_ART', 'NOM_ART']]}")
+        
         return df_pedidos
-
+        
     except Exception as e:
         logger.error(f"Error leyendo pedidos pendientes: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
