@@ -877,7 +877,15 @@ def calcular_ocupacion_almacen(productos, productos_info):
     }
 
 def calcular_penalizacion_espacio(palets):
-    """Calcula la penalización por espacio ocupado"""
+    """
+    Calcula la penalización por espacio ocupado basado en el total de palets.
+    
+    Args:
+        palets: Número total de palets ocupados
+        
+    Returns:
+        Penalización numérica (0 si no hay penalización, valor negativo si hay penalización)
+    """
     if palets > 1200:
         return -100
     elif palets > 1000:
@@ -887,26 +895,23 @@ def calcular_penalizacion_espacio(palets):
     return 0
 
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
+    """
+    Exporta los resultados de la optimización a un archivo CSV.
+    La penalización por espacio se calcula basada en el total de palets, no por producto individual.
+    """
     try:
         datos = []
         productos_info, productos_omitir = leer_indicaciones_articulos()
         
-        # Procesar productos y calcular totales
+        # Primero, calcular el total de palets para todos los productos
         total_palets = 0
         total_stock = 0
         
         for producto in productos:
             if producto.cod_art not in productos_omitir:
-                estado = "No válido"  # Por defecto
-                
                 # Verificar si el producto está en productos_optimizados
                 producto_opt = next((p for p in productos_optimizados if p.cod_art == producto.cod_art), None)
-                
                 if producto_opt:
-                    if hasattr(producto_opt, 'horas_necesarias') and producto_opt.horas_necesarias > 0:
-                        estado = "Planificado"
-                    else:
-                        estado = "Válido sin producción"
                     producto_final = producto_opt
                 else:
                     producto_final = producto
@@ -914,18 +919,57 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                 # Obtener información adicional del producto
                 info_producto = productos_info.get(producto.cod_art, {})
                 cajas_palet = info_producto.get('cajas_palet', 40)  # Valor por defecto: 40
-                orden_planificacion = info_producto.get('orden_planificacion', '')
                 
-                # Calcular valores individuales
+                # Calcular stock total y palets
                 cajas_a_producir = getattr(producto_final, 'cajas_a_producir', 0)
-                horas_necesarias = getattr(producto_final, 'horas_necesarias', 0)
-                
                 stock_total = producto_final.stock_inicial + cajas_a_producir
                 palets = stock_total / cajas_palet if cajas_palet > 0 else 0
                 
                 # Actualizar totales
                 total_palets += palets
                 total_stock += stock_total
+        
+        # Calcular la penalización global basada en el total de palets
+        if total_palets > 1200:
+            penalizacion_global = -100
+        elif total_palets > 1000:
+            penalizacion_global = -50
+        elif total_palets > 800:
+            penalizacion_global = -10
+        else:
+            penalizacion_global = 0
+            
+        logger.info(f"Total de palets: {total_palets:.2f}")
+        logger.info(f"Penalización global: {penalizacion_global}")
+        
+        # Crear los datos para el DataFrame con la penalización global
+        for producto in productos:
+            if producto.cod_art not in productos_omitir:
+                # Verificar si el producto está en productos_optimizados
+                producto_opt = next((p for p in productos_optimizados if p.cod_art == producto.cod_art), None)
+                
+                if producto_opt:
+                    if getattr(producto_opt, 'horas_necesarias', 0) > 0:
+                        estado = "Planificado"
+                    else:
+                        estado = "Válido sin producción"
+                    producto_final = producto_opt
+                else:
+                    estado = "No válido"
+                    producto_final = producto
+                
+                # Obtener información adicional
+                info_producto = productos_info.get(producto.cod_art, {})
+                cajas_palet = info_producto.get('cajas_palet', 40)
+                orden_planificacion = info_producto.get('orden_planificacion', '')
+                
+                # Calcular valores individuales
+                cajas_a_producir = getattr(producto_final, 'cajas_a_producir', 0)
+                horas_necesarias = getattr(producto_final, 'horas_necesarias', 0)
+                
+                # Calcular stock total y palets
+                stock_total = producto_final.stock_inicial + cajas_a_producir
+                palets = stock_total / cajas_palet if cajas_palet > 0 else 0
                 
                 # Preparar cobertura final
                 if hasattr(producto_final, 'cobertura_final_plan'):
@@ -955,10 +999,111 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                     'Cobertura_Final_Est': round(cobertura_final_est, 2),
                     'Total_Palets': round(palets, 2),
                     'Total_Stock': round(stock_total, 2),
-                    'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
+                    'Penalizacion_Espacio': penalizacion_global  # Aquí aplicamos la penalización global a todos los productos
                 })
+        
+        # Crear DataFrame y ordenar
+        df = pd.DataFrame(datos)
+        df = ordenar_productos(df)
+        
+        # Crear nombre de archivo
+        if isinstance(fecha_planificacion, str):
+            fecha_planificacion = datetime.strptime(fecha_planificacion, '%d-%m-%Y')
+            
+        nombre_archivo = f"planificacion_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}_dp{dias_planificacion}_cmin{dias_cobertura_base}.csv"
+
+        # Exportar a CSV
+        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        
+        # Generar resumen de ocupación
+        logger.info(f"Resultados exportados a {nombre_archivo}")
+        logger.info(f"Total palets: {total_palets:.2f}")
+        logger.info(f"Total stock (cajas): {total_stock:.2f}")
+        logger.info(f"Penalización por ocupación de almacén: {penalizacion_global}")
+        
+        # Generar informe detallado de ocupación si la penalización es negativa
+        if penalizacion_global < 0:
+            generar_informe_ocupacion(datos, total_palets, productos_info)
+            
+        return df
+        
     except Exception as e:
-        logger.error(f"Error al exportar resultados: {str(e)}")
+        logger.error(f"Error exportando resultados: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
+    
+def generar_informe_ocupacion(datos, total_palets, productos_info):
+    """
+    Genera un informe detallado de ocupación del almacén.
+    
+    Args:
+        datos: Lista de diccionarios con los datos de cada producto
+        total_palets: Total de palets ocupados
+        productos_info: Diccionario con información adicional de productos
+    """
+    try:
+        # Calcular límites y penalizaciones
+        if total_palets > 1200:
+            limite_excedido = "crítico (>1200 palets)"
+            reduccion_recomendada = total_palets - 1200
+        elif total_palets > 1000:
+            limite_excedido = "alto (>1000 palets)"
+            reduccion_recomendada = total_palets - 1000
+        elif total_palets > 800:
+            limite_excedido = "moderado (>800 palets)"
+            reduccion_recomendada = total_palets - 800
+        else:
+            return  # No es necesario generar informe
+            
+        # Identificar productos que más espacio ocupan
+        productos_ordenados = sorted(datos, key=lambda x: x['Total_Palets'], reverse=True)
+        top_productos = productos_ordenados[:10]  # Top 10 productos
+        
+        # Calcular eficiencia de almacenamiento (cajas por palet)
+        for producto in top_productos:
+            cod_art = producto['COD_ART']
+            cajas_palet = productos_info.get(cod_art, {}).get('cajas_palet', 40)
+            producto['Eficiencia'] = round(cajas_palet, 2)
+            
+        # Generar informe
+        with open('informe_ocupacion_almacen.txt', 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("INFORME DE OCUPACIÓN DEL ALMACÉN\n")
+            f.write("=" * 80 + "\n\n")
+            
+            f.write(f"OCUPACIÓN TOTAL: {total_palets:.2f} palets\n")
+            f.write(f"NIVEL DE ALERTA: {limite_excedido}\n")
+            f.write(f"REDUCCIÓN RECOMENDADA: {reduccion_recomendada:.2f} palets\n\n")
+            
+            f.write("TOP 10 PRODUCTOS POR OCUPACIÓN:\n")
+            f.write("-" * 80 + "\n")
+            f.write(f"{'COD_ART':<10} {'NOM_ART':<30} {'Palets':<8} {'% del Total':<12} {'Cajas/Palet':<12} {'Estado':<15}\n")
+            f.write("-" * 80 + "\n")
+            
+            for p in top_productos:
+                porcentaje = (p['Total_Palets'] / total_palets) * 100
+                f.write(f"{p['COD_ART']:<10} {p['NOM_ART'][:30]:<30} {p['Total_Palets']:<8.2f} "
+                       f"{porcentaje:<12.2f}% {p['Eficiencia']:<12.2f} {p['Estado']:<15}\n")
+            
+            f.write("\nRECOMENDACIONES:\n")
+            f.write("-" * 80 + "\n")
+            f.write("1. Revisar los productos con mayor ocupación y baja eficiencia (cajas/palet)\n")
+            f.write("2. Considerar redistribuir la producción en semanas con menor ocupación\n")
+            f.write("3. Evaluar la posibilidad de ajustar la producción de productos con alta cobertura\n")
+            
+            # Identificar productos con alta cobertura
+            alta_cobertura = [p for p in datos if p['Cobertura_Final'] > 45 and p['Estado'] == 'Planificado']
+            if alta_cobertura:
+                f.write("\nPRODUCTOS CON ALTA COBERTURA QUE PODRÍAN REDUCIRSE:\n")
+                f.write("-" * 80 + "\n")
+                f.write(f"{'COD_ART':<10} {'NOM_ART':<30} {'Cobertura':<10} {'Palets':<8}\n")
+                f.write("-" * 80 + "\n")
+                
+                for p in sorted(alta_cobertura, key=lambda x: x['Cobertura_Final'], reverse=True)[:5]:
+                    f.write(f"{p['COD_ART']:<10} {p['NOM_ART'][:30]:<30} {p['Cobertura_Final']:<10.2f} {p['Total_Palets']:<8.2f}\n")
+        
+        logger.info("Informe de ocupación generado: informe_ocupacion_almacen.txt")
+        
+    except Exception as e:
+        logger.error(f"Error generando informe de ocupación: {str(e)}")

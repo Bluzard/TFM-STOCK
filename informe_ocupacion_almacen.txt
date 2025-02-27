@@ -1,0 +1,38 @@
+================================================================================
+INFORME DE OCUPACIÓN DEL ALMACÉN
+================================================================================
+
+OCUPACIÓN TOTAL: 1433.25 palets
+NIVEL DE ALERTA: crítico (>1200 palets)
+REDUCCIÓN RECOMENDADA: 233.25 palets
+
+TOP 10 PRODUCTOS POR OCUPACIÓN:
+--------------------------------------------------------------------------------
+COD_ART    NOM_ART                        Palets   % del Total  Cajas/Palet  Estado         
+--------------------------------------------------------------------------------
+5718619    Pulguita                       103.99   7.26        % 28.00        Válido sin producción
+5720811    Baguetina Cereales             103.39   7.21        % 28.00        Planificado    
+430621     Pepito Easy                    77.20    5.39        % 24.00        Planificado    
+434721     Bollito Easy                   75.86    5.29        % 28.00        Planificado    
+430702     Panecito Ecológico Easy        61.24    4.27        % 28.00        Válido sin producción
+5718540    Panecillo con  Semillas        59.88    4.18        % 28.00        Válido sin producción
+430731     Panecito Easy                  57.71    4.03        % 28.00        Válido sin producción
+453251     Panecillo 100% Integral        49.34    3.44        % 28.00        Planificado    
+432211     Pepito con Salvado Easy        47.12    3.29        % 24.00        Planificado    
+402011     Viena Mondat 145 gr            46.69    3.26        % 28.00        Válido sin producción
+
+RECOMENDACIONES:
+--------------------------------------------------------------------------------
+1. Revisar los productos con mayor ocupación y baja eficiencia (cajas/palet)
+2. Considerar redistribuir la producción en semanas con menor ocupación
+3. Evaluar la posibilidad de ajustar la producción de productos con alta cobertura
+
+PRODUCTOS CON ALTA COBERTURA QUE PODRÍAN REDUCIRSE:
+--------------------------------------------------------------------------------
+COD_ART    NOM_ART                        Cobertura  Palets  
+--------------------------------------------------------------------------------
+401301     Baguette Plus                  111.97     38.39   
+423111     Panecillo con Cereales y Semil 95.93      21.32   
+403801     Mini Viena Andaluza            83.42      19.66   
+432311     Pepito con Salvado Sin Sal Aña 75.40      27.17   
+432911     Panecito con Salvado Easy      75.24      21.23   
