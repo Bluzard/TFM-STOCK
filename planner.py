@@ -265,21 +265,57 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
             if horas_redondeadas > horas_disponibles:
                 logger.warning(f"Horas planificadas ({horas_redondeadas:.2f}) superan las horas disponibles ({horas_disponibles:.2f}).")
         
-                # Tomar el producto con más horas asignadas
-                producto_ajustar = max(productos_validos, key=lambda p: p.horas_necesarias)
-                print(f"Antes del ajuste: {producto_ajustar.horas_necesarias}")
-
-                # Reducir solo el producto con más horas para cuadrar exactamente a horas_disponibles
+                # Ordenar productos por horas necesarias en orden descendente
+                productos_validos.sort(key=lambda p: p.horas_necesarias, reverse=True)
+    
+                # Obtener los 3 productos con más horas planificadas para restar proporcionalmente el exceso de horas
+                top_productos = productos_validos[:3]
+    
+                # Calcular la diferencia a ajustar
                 diferencia_horas = horas_redondeadas - horas_disponibles
-                producto_ajustar.horas_necesarias = max(producto_ajustar.horas_necesarias - diferencia_horas, 0)
-                print(f"Después del ajuste: {producto_ajustar.horas_necesarias}")
-
-                # Recalcular su producción de cajas después del ajuste
-                producto_ajustar.cajas_a_producir = producto_ajustar.horas_necesarias * producto_ajustar.cajas_hora_reales
-
+                logger.info(f"Horas redondeadas global: {horas_redondeadas}")
+                logger.info(f"diferencia horas: {diferencia_horas}")
+    
+                 # Paso 1: Ajustar el primer producto
+                producto_1 = top_productos[0]
+                logger.info(f"producto_1.horas_necesarias: {producto_1.horas_necesarias}")
+                proporcion_1 = producto_1.horas_necesarias / sum(p.horas_necesarias for p in top_productos)
+                horas_a_restar_1 = diferencia_horas * proporcion_1
+                horas_a_restar_1 = redondear_media_hora_al_alza(horas_a_restar_1)
+                producto_1.horas_necesarias -= horas_a_restar_1
+                logger.info(f"producto_1.horas_necesarias tras restar proporción: {producto_1.horas_necesarias}")
+                producto_1.cajas_a_producir = producto_1.horas_necesarias * producto_1.cajas_hora_reales
+                diferencia_horas -= horas_a_restar_1
+                logger.info(f"Horas redondeadas primer producto: {horas_a_restar_1}")
+                horas_redondeadas -= horas_a_restar_1
+                logger.info(f"Horas redondeadas tras primer ajuste: {horas_redondeadas}")
+    
+                # Paso 2: Ajustar el segundo producto
+                producto_2 = top_productos[1]
+                proporcion_2 = producto_2.horas_necesarias / sum(p.horas_necesarias for p in top_productos[1:])
+                horas_a_restar_2 = diferencia_horas * proporcion_2
+                horas_a_restar_2 = redondear_media_hora_al_alza(horas_a_restar_2)
+                producto_2.horas_necesarias -= horas_a_restar_2
+                producto_2.cajas_a_producir = producto_2.horas_necesarias * producto_2.cajas_hora_reales
+                diferencia_horas -= horas_a_restar_2
+                logger.info(f"Horas redondeadas segundo producto: {horas_a_restar_2}")
+                horas_redondeadas -= horas_a_restar_2
+                logger.info(f"Horas redondeadas tras segundo ajuste: {horas_redondeadas}")
+    
+                # Paso 3: Ajustar el tercer producto
+                producto_3 = top_productos[2]
+                horas_a_restar_3 = diferencia_horas  # Restar la diferencia restante directamente
+                # horas_a_restar_3 = redondear_media_hora_al_alza(horas_a_restar_3)
+                producto_3.horas_necesarias -= horas_a_restar_3
+                producto_3.cajas_a_producir = producto_3.horas_necesarias * producto_3.cajas_hora_reales
+                diferencia_horas -= horas_a_restar_3
+                logger.info(f"Horas redondeadas tercer producto: {horas_a_restar_3}")
+                horas_redondeadas -= horas_a_restar_3
+                logger.info(f"Horas redondeadas tras tercer ajuste: {horas_redondeadas}")
+    
                 # Recalcular horas_redondeadas después del ajuste
                 horas_redondeadas = sum(producto.horas_necesarias for producto in productos_validos)
-                print(f"Horas redondeadas recalculadas: {horas_redondeadas}")
+                logger.info(f"Horas redondeadas recalculadas: {horas_redondeadas}")
                 
                 # >>> VERIFICACIÓN FINAL: Asegurar que las horas ajustadas no sobrepasan el límite
                 if horas_redondeadas != horas_disponibles:
