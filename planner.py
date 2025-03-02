@@ -431,6 +431,15 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
     try:
         if isinstance(fecha_dataset, date):
             fecha_dataset = datetime.combine(fecha_dataset, datetime.min.time())
+            
+        # CORRECCIÓN: No intentar obtener basename de un DataFrame
+        logger.info(f"Procesando datos de pedidos pendientes")
+        logger.info(f"Pedidos pendientes cargados: {len(df_pedidos)} productos")
+        
+        # Identificar columnas de fechas
+        fecha_cols = [col for col in df_pedidos.columns if col not in ['COD_ART', 'NOM_ART']]
+        logger.info(f"Columnas de fechas: {fecha_cols}")
+        
         # Lista de productos que deben planificarse adicionalmente
         productos_a_planificar = []
 
@@ -440,7 +449,7 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
                 continue  # No se considera si no hay demanda media
 
             # Obtener los pedidos para este producto
-            pedidos_producto = df_pedidos[df_pedidos['COD_ART'] == producto.cod_art]
+            pedidos_producto = df_pedidos[df_pedidos['COD_ART'] == str(producto.cod_art)]
             if pedidos_producto.empty:
                 continue  # No hay pedidos para este producto
 
@@ -462,19 +471,30 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
                     if of_date <= fecha_actual:
                         stock_previsto += producto.of_reales
 
-                # Restar los pedidos del día
-                if fecha_str in df_pedidos.columns:
-                    pedido_dia = pedidos_producto[fecha_str].values[0]
-                    if pd.notna(pedido_dia):
-                        stock_previsto -= abs(pedido_dia)  # Los pedidos son negativos en el archivo
-
                 # Verificar si el stock previsto es menor que el stock de seguridad
                 if stock_previsto < stock_seguridad:
                     logger.warning(f"El día {fecha_str}, el stock de seguridad ha sido sobrepasado para el producto {producto.cod_art}.")
 
                     # Calcular la cantidad a fabricar
                     dias_faltantes = dias_planificacion - i
-                    cantidad_a_fabricar = producto.demanda_media * min(dias_faltantes + 7, dias_planificacion) + abs(pedido_dia)
+                    cantidad_a_fabricar = producto.demanda_media * min(dias_faltantes + 7, dias_planificacion)
+                    
+                    # Para los pedidos específicos, buscar en todas las columnas de fecha
+                    pedido_dia = 0
+                    for col in fecha_cols:
+                        try:
+                            # Intentar obtener el valor del pedido para esta fecha
+                            if col in pedidos_producto.columns and not pedidos_producto[col].empty:
+                                valor = pedidos_producto[col].values[0]
+                                if pd.notna(valor) and valor != 0:
+                                    pedido_dia += abs(valor)  # Los pedidos son negativos en el archivo
+                        except Exception as e:
+                            logger.warning(f"Error al procesar pedido en columna {col}: {str(e)}")
+
+                    # Añadir pedidos específicos si existen
+                    if pedido_dia > 0:
+                        cantidad_a_fabricar += pedido_dia
+                        logger.info(f"Añadiendo pedido específico de {pedido_dia} cajas para producto {producto.cod_art}")
 
                     # Añadir el producto a la lista de productos a planificar
                     producto.cajas_a_producir = cantidad_a_fabricar
@@ -486,6 +506,8 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
 
     except Exception as e:
         logger.error(f"Error verificando pedidos: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         return []
     
 def calcular_ocupacion_almacen(productos, productos_info):
@@ -601,8 +623,172 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
         df_ordenado.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
         logger.info(f"Resultados exportados a {nombre_archivo}")
         
+        # Generar calendario de producción
+        productos_planificados = [p for p in productos_optimizados if hasattr(p, 'horas_necesarias') and p.horas_necesarias > 0]
+        calendario = generar_calendario_produccion(productos_planificados)
+        
+        # Exportar calendario
+        nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
+        exportar_calendario(calendario, fecha_planificacion, nombre_calendario)
+        
     except Exception as e:
         logger.error(f"Error exportando resultados: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
+
+def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
+    """
+    Genera un calendario de producción diario basado en los productos optimizados.
+    Organiza la producción para minimizar cambios entre familias de productos.
+    
+    Args:
+        productos_planificados (list): Lista de productos con horas de producción asignadas
+        horas_por_dia (int): Horas disponibles por día de producción
+    
+    Returns:
+        dict: Calendario de producción organizado por días
+    """
+    try:
+        # Primero ordenamos los productos por Orden_Planificacion, COD_GRU y Cobertura_Inicial
+        # INICIO -> "" -> FINAL
+        # VIME -> MEC
+        # Menor cobertura primero
+        
+        # Definir orden de planificación
+        orden_plan = {"INICIO": 0, "": 1, "FINAL": 2}
+        orden_grupo = {"VIME": 0, "MEC": 1}
+        
+        # Ordenar productos
+        sorted_productos = sorted(
+            productos_planificados, 
+            key=lambda p: (
+                orden_plan.get(p.orden_planificacion, 1),
+                orden_grupo.get(p.cod_gru, 1),
+                p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf')
+            )
+        )
+        
+        # Inicializar calendario
+        calendario = {}
+        dia_actual = 1
+        horas_disponibles_dia = horas_por_dia
+        ultimo_grupo = None
+        
+        # Tiempo perdido por cambio de grupo (minutos)
+        CAMBIO_VIME_MEC = 8  # minutos
+        CAMBIO_MEC_VIME = 10  # minutos
+        
+        for producto in sorted_productos:
+            if producto.horas_necesarias <= 0:
+                continue
+                
+            horas_pendientes = producto.horas_necesarias
+            
+            while horas_pendientes > 0:
+                # Si no hay suficientes horas en el día actual, pasar al siguiente día
+                if horas_disponibles_dia <= 0:
+                    dia_actual += 1
+                    horas_disponibles_dia = horas_por_dia
+                    ultimo_grupo = None  # Reiniciar el grupo al empezar un nuevo día
+                
+                # Calcular tiempo de cambio si hay cambio de grupo
+                tiempo_cambio_horas = 0
+                if ultimo_grupo is not None and ultimo_grupo != producto.cod_gru:
+                    if ultimo_grupo == "VIME" and producto.cod_gru == "MEC":
+                        tiempo_cambio_horas = CAMBIO_VIME_MEC / 60.0  # Convertir a horas
+                    elif ultimo_grupo == "MEC" and producto.cod_gru == "VIME":
+                        tiempo_cambio_horas = CAMBIO_MEC_VIME / 60.0  # Convertir a horas
+                
+                # Restar el tiempo de cambio de las horas disponibles
+                if tiempo_cambio_horas > 0:
+                    horas_disponibles_dia -= tiempo_cambio_horas
+                    if horas_disponibles_dia < 0:
+                        dia_actual += 1
+                        horas_disponibles_dia = horas_por_dia
+                
+                # Determinar cuántas horas asignar en este día
+                horas_a_asignar = min(horas_pendientes, horas_disponibles_dia)
+                
+                # Asegurarse de que no producimos menos de 2 horas (lote mínimo)
+                # Si quedan menos de 2 horas disponibles pero el producto necesita más,
+                # pasar al siguiente día
+                if horas_a_asignar < 2 and horas_pendientes > horas_a_asignar:
+                    dia_actual += 1
+                    horas_disponibles_dia = horas_por_dia
+                    continue
+                
+                # Añadir al calendario
+                if dia_actual not in calendario:
+                    calendario[dia_actual] = []
+                    
+                calendario[dia_actual].append({
+                    'cod_art': producto.cod_art,
+                    'nom_art': producto.nom_art,
+                    'cod_gru': producto.cod_gru,
+                    'horas': horas_a_asignar,
+                    'cajas': (horas_a_asignar / producto.horas_necesarias) * producto.cajas_a_producir
+                })
+                
+                # Actualizar variables de seguimiento
+                horas_pendientes -= horas_a_asignar
+                horas_disponibles_dia -= horas_a_asignar
+                ultimo_grupo = producto.cod_gru
+        
+        logger.info(f"Calendario generado: {len(calendario)} días de producción")
+        return calendario
+    except Exception as e:
+        logger.error(f"Error generando calendario: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
+        return {}
+
+def exportar_calendario(calendario, fecha_inicio, nombre_archivo):
+    """
+    Exporta el calendario de producción a un archivo CSV
+    
+    Args:
+        calendario (dict): Calendario de producción por días
+        fecha_inicio (datetime): Fecha de inicio de la producción
+        nombre_archivo (str): Nombre del archivo a generar
+    """
+    try:
+        filas = []
+        
+        # Convertir fecha_inicio si es string
+        if isinstance(fecha_inicio, str):
+            fecha_inicio_dt = datetime.strptime(fecha_inicio, '%d-%m-%Y')
+        elif isinstance(fecha_inicio, date):
+            fecha_inicio_dt = datetime.combine(fecha_inicio, datetime.min.time())
+        else:
+            fecha_inicio_dt = fecha_inicio
+        
+        # Procesar cada día del calendario
+        for dia, productos in calendario.items():
+            fecha_actual = fecha_inicio_dt + timedelta(days=dia-1)
+            fecha_str = fecha_actual.strftime('%d-%m-%Y')
+            
+            # Calcular el total de horas del día
+            total_horas_dia = sum(producto['horas'] for producto in productos)
+            
+            for producto in productos:
+                filas.append({
+                    'Fecha': fecha_str,
+                    'Dia': dia,
+                    'COD_ART': producto['cod_art'],
+                    'NOM_ART': producto['nom_art'],
+                    'COD_GRU': producto['cod_gru'],
+                    'Horas': round(producto['horas'], 2),
+                    'Cajas': round(producto['cajas'], 2),
+                    'Total_Horas_Dia': round(total_horas_dia, 2)
+                })
+        
+        # Exportar a CSV
+        df = pd.DataFrame(filas)
+        df.to_csv(nombre_archivo, index=False, sep=';', decimal=',', encoding='utf-8-sig')
+        logger.info(f"Calendario exportado a {nombre_archivo}")
+        
+    except Exception as e:
+        logger.error(f"Error exportando calendario: {str(e)}")
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
         
