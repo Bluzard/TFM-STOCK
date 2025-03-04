@@ -674,15 +674,23 @@ def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
         horas_disponibles_dia = horas_por_dia
         ultimo_grupo = None
         
+        # DESACTIVAMOS temporalmente el descuento por cambio de grupo para pruebas
         # Tiempo perdido por cambio de grupo (minutos)
-        CAMBIO_VIME_MEC = 8  # minutos
-        CAMBIO_MEC_VIME = 10  # minutos
+        # CAMBIO_VIME_MEC = 8  # minutos
+        # CAMBIO_MEC_VIME = 10  # minutos
         
         for producto in sorted_productos:
-            if producto.horas_necesarias <= 0:
+            if not hasattr(producto, 'horas_necesarias') or producto.horas_necesarias <= 0:
                 continue
                 
             horas_pendientes = producto.horas_necesarias
+            
+            # Redondear a múltiplos de 0.5
+            horas_pendientes = redondear_media_hora_al_alza(horas_pendientes)
+            
+            # Para evitar duplicaciones, creamos un nuevo id único para cada producto
+            producto_id = f"{producto.cod_art}_{id(producto)}"
+            logger.info(f"Planificando producto: {producto.cod_art} con {horas_pendientes} horas")
             
             while horas_pendientes > 0:
                 # Si no hay suficientes horas en el día actual, pasar al siguiente día
@@ -691,20 +699,20 @@ def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
                     horas_disponibles_dia = horas_por_dia
                     ultimo_grupo = None  # Reiniciar el grupo al empezar un nuevo día
                 
-                # Calcular tiempo de cambio si hay cambio de grupo
+                # DESACTIVADO: Calcular tiempo de cambio si hay cambio de grupo
                 tiempo_cambio_horas = 0
-                if ultimo_grupo is not None and ultimo_grupo != producto.cod_gru:
-                    if ultimo_grupo == "VIME" and producto.cod_gru == "MEC":
-                        tiempo_cambio_horas = CAMBIO_VIME_MEC / 60.0  # Convertir a horas
-                    elif ultimo_grupo == "MEC" and producto.cod_gru == "VIME":
-                        tiempo_cambio_horas = CAMBIO_MEC_VIME / 60.0  # Convertir a horas
+                # if ultimo_grupo is not None and ultimo_grupo != producto.cod_gru:
+                #     if ultimo_grupo == "VIME" and producto.cod_gru == "MEC":
+                #         tiempo_cambio_horas = CAMBIO_VIME_MEC / 60.0  # Convertir a horas
+                #     elif ultimo_grupo == "MEC" and producto.cod_gru == "VIME":
+                #         tiempo_cambio_horas = CAMBIO_MEC_VIME / 60.0  # Convertir a horas
                 
-                # Restar el tiempo de cambio de las horas disponibles
-                if tiempo_cambio_horas > 0:
-                    horas_disponibles_dia -= tiempo_cambio_horas
-                    if horas_disponibles_dia < 0:
-                        dia_actual += 1
-                        horas_disponibles_dia = horas_por_dia
+                # DESACTIVADO: Restar el tiempo de cambio de las horas disponibles
+                # if tiempo_cambio_horas > 0:
+                #     horas_disponibles_dia -= tiempo_cambio_horas
+                #     if horas_disponibles_dia < 0:
+                #         dia_actual += 1
+                #         horas_disponibles_dia = horas_por_dia
                 
                 # Determinar cuántas horas asignar en este día
                 horas_a_asignar = min(horas_pendientes, horas_disponibles_dia)
@@ -717,24 +725,42 @@ def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
                     horas_disponibles_dia = horas_por_dia
                     continue
                 
+                # Redondear a múltiplos de 0.5
+                horas_a_asignar = redondear_media_hora_al_alza(horas_a_asignar)
+                
                 # Añadir al calendario
                 if dia_actual not in calendario:
                     calendario[dia_actual] = []
-                    
+                
+                # Calculamos proporción exacta de cajas
+                proporcion = horas_a_asignar / producto.horas_necesarias
+                cajas_asignadas = proporcion * producto.cajas_a_producir
+                
                 calendario[dia_actual].append({
                     'cod_art': producto.cod_art,
                     'nom_art': producto.nom_art,
                     'cod_gru': producto.cod_gru,
                     'horas': horas_a_asignar,
-                    'cajas': (horas_a_asignar / producto.horas_necesarias) * producto.cajas_a_producir
+                    'cajas': cajas_asignadas
                 })
                 
                 # Actualizar variables de seguimiento
                 horas_pendientes -= horas_a_asignar
                 horas_disponibles_dia -= horas_a_asignar
                 ultimo_grupo = producto.cod_gru
+                
+                # Log de depuración
+                logger.debug(f"Día {dia_actual}: Producto {producto.cod_art}, horas asignadas: {horas_a_asignar}, " +
+                          f"horas pendientes: {horas_pendientes}, horas disponibles: {horas_disponibles_dia}")
         
-        logger.info(f"Calendario generado: {len(calendario)} días de producción")
+        # Verificar la asignación total para cada día
+        total_horas_asignadas = 0
+        for dia, productos in calendario.items():
+            horas_dia = sum(p['horas'] for p in productos)
+            logger.info(f"Día {dia}: Total horas asignadas: {horas_dia}/{horas_por_dia}")
+            total_horas_asignadas += horas_dia
+        
+        logger.info(f"Calendario generado: {len(calendario)} días de producción, {total_horas_asignadas} horas totales asignadas")
         return calendario
     except Exception as e:
         logger.error(f"Error generando calendario: {str(e)}")
@@ -770,16 +796,22 @@ def exportar_calendario(calendario, fecha_inicio, nombre_archivo):
             # Calcular el total de horas del día
             total_horas_dia = sum(producto['horas'] for producto in productos)
             
+            # Verificar que el total sea un múltiplo de 0.5
+            total_horas_dia = redondear_media_hora_al_alza(total_horas_dia)
+            
             for producto in productos:
+                # Asegurar que las horas son múltiplos de 0.5
+                horas = redondear_media_hora_al_alza(producto['horas'])
+                
                 filas.append({
                     'Fecha': fecha_str,
                     'Dia': dia,
                     'COD_ART': producto['cod_art'],
                     'NOM_ART': producto['nom_art'],
                     'COD_GRU': producto['cod_gru'],
-                    'Horas': round(producto['horas'], 2),
+                    'Horas': round(horas, 1),  # Redondear a 1 decimal (0.5)
                     'Cajas': round(producto['cajas'], 2),
-                    'Total_Horas_Dia': round(total_horas_dia, 2)
+                    'Total_Horas_Dia': round(total_horas_dia, 1)  # Redondear a 1 decimal (0.5)
                 })
         
         # Exportar a CSV
