@@ -2,7 +2,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkcalendar import DateEntry
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_dataset_existe
 from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
@@ -14,7 +14,7 @@ class PlannerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Planificación de Producción")
-        self.root.geometry("500x400")
+        self.root.geometry("600x450")
         
         # Variables
         self.dataset_path = tk.StringVar()
@@ -23,6 +23,7 @@ class PlannerGUI:
         self.dias_no_habiles = tk.StringVar()
         self.horas_mantenimiento = tk.StringVar()
         self.dias_cobertura = tk.StringVar(value="3")  # Valor por defecto
+        self.replanificar_semana = tk.BooleanVar(value=False)  # Variable para la nueva pregunta
         
         self.create_widgets()
         
@@ -47,24 +48,48 @@ class PlannerGUI:
                                     date_pattern='dd/mm/yyyy')
         self.fecha_inicio.grid(row=2, column=1, sticky=tk.W)
         
-        # Días planificación
+        # Días planificación (combobox)
         ttk.Label(main_frame, text="Días Planificación:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.dias_planificacion, width=10).grid(row=3, column=1, sticky=tk.W)
+        self.combo_dias_planif = ttk.Combobox(main_frame, textvariable=self.dias_planificacion, 
+                                           values=["1", "2", "3", "4", "5", "6", "7"], 
+                                           width=10, state="readonly")
+        self.combo_dias_planif.current(6)  # Seleccionar 7 por defecto
+        self.combo_dias_planif.grid(row=3, column=1, sticky=tk.W)
+        ttk.Label(main_frame, text="Entre 1 y 7", foreground="red").grid(row=3, column=2, sticky=tk.W)
         
-        # Días no hábiles
+        # Días no hábiles (combobox)
         ttk.Label(main_frame, text="Días No Hábiles:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.dias_no_habiles, width=10).grid(row=4, column=1, sticky=tk.W)
+        self.combo_dias_no_habiles = ttk.Combobox(main_frame, textvariable=self.dias_no_habiles, 
+                                               values=["1", "2", "3", "4"], 
+                                               width=10, state="readonly")
+        self.combo_dias_no_habiles.current(0)  # Seleccionar 1 por defecto
+        self.combo_dias_no_habiles.grid(row=4, column=1, sticky=tk.W)
+        ttk.Label(main_frame, text="Entre 1 y 4", foreground="red").grid(row=4, column=2, sticky=tk.W)
         
-        # Horas mantenimiento
-        ttk.Label(main_frame, text="Horas Mantenimiento:").grid(row=5, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.horas_mantenimiento, width=10).grid(row=5, column=1, sticky=tk.W)
+        # Horas mantenimiento (combobox)
+        ttk.Label(main_frame, text="Horas Mantenimiento/Pruebas:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        self.combo_horas_mant = ttk.Combobox(main_frame, textvariable=self.horas_mantenimiento, 
+                                          values=["4", "5", "6", "7", "8", "9", "10", "11", "12"], 
+                                          width=10, state="readonly")
+        self.combo_horas_mant.current(4)  # Seleccionar 8 por defecto
+        self.combo_horas_mant.grid(row=5, column=1, sticky=tk.W)
+        ttk.Label(main_frame, text="Entre 4 y 12", foreground="red").grid(row=5, column=2, sticky=tk.W)
         
-        # Días cobertura
+        # Días cobertura (combobox)
         ttk.Label(main_frame, text="Días Cobertura:").grid(row=6, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.dias_cobertura, width=10).grid(row=6, column=1, sticky=tk.W)
+        self.combo_dias_cobertura = ttk.Combobox(main_frame, textvariable=self.dias_cobertura, 
+                                              values=["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], 
+                                              width=10, state="readonly")
+        self.combo_dias_cobertura.current(0)  # Seleccionar 3 por defecto
+        self.combo_dias_cobertura.grid(row=6, column=1, sticky=tk.W)
+        ttk.Label(main_frame, text="Entre 3 y 12", foreground="red").grid(row=6, column=2, sticky=tk.W)
+        
+        # Replanificar semana en curso o próxima (checkbox)
+        ttk.Label(main_frame, text="¿Planificar semana en curso?").grid(row=7, column=0, sticky=tk.W, pady=10)
+        ttk.Checkbutton(main_frame, variable=self.replanificar_semana).grid(row=7, column=1, sticky=tk.W)
         
         # Botón generar
-        ttk.Button(main_frame, text="Generar Plan", command=self.generate_plan).grid(row=7, column=1, pady=20)
+        ttk.Button(main_frame, text="Generar Plan", command=self.generate_plan).grid(row=8, column=1, pady=20)
         
     def browse_file(self):
         filetypes = (
@@ -91,7 +116,11 @@ class PlannerGUI:
                 self.dataset_date.set(date_obj.strftime('%d/%m/%Y'))
                 
                 # Establecer fecha inicio un día después
-                self.fecha_inicio.set_date(date_obj)
+                self.fecha_inicio.set_date(date_obj + timedelta(days=1))
+                
+                # Si es semana en curso, actualizar el checkbox
+                today = datetime.now().date()
+                self.replanificar_semana.set(date_obj.date() <= today)
             else:
                 self.dataset_date.set("Formato de archivo no reconocido")
         except Exception as e:
@@ -107,20 +136,24 @@ class PlannerGUI:
                 raise ValueError("Archivo dataset no encontrado")
                 
             dias_planificacion = int(self.dias_planificacion.get())
-            if dias_planificacion <= 0:
-                raise ValueError("Los días de planificación deben ser positivos")
+            if dias_planificacion < 1 or dias_planificacion > 7:
+                raise ValueError("Los días de planificación deben estar entre 1 y 7")
                 
             dias_no_habiles = float(self.dias_no_habiles.get())
-            if dias_no_habiles < 0 or dias_no_habiles >= dias_planificacion:
-                raise ValueError("Días no hábiles inválidos")
+            if dias_no_habiles < 1 or dias_no_habiles > 4:
+                raise ValueError("Los días no hábiles deben estar entre 1 y 4")
+                
+            # Verificar que días no hábiles sean menores que días planificación
+            if dias_no_habiles >= dias_planificacion:
+                raise ValueError("Los días no hábiles deben ser menos que los días de planificación")
                 
             horas_mantenimiento = int(self.horas_mantenimiento.get())
-            if horas_mantenimiento < 0:
-                raise ValueError("Las horas de mantenimiento no pueden ser negativas")
+            if horas_mantenimiento < 4 or horas_mantenimiento > 12:
+                raise ValueError("Las horas de mantenimiento deben estar entre 4 y 12")
                 
             dias_cobertura = int(self.dias_cobertura.get())
-            if dias_cobertura <= 0:
-                raise ValueError("Los días de cobertura deben ser positivos")
+            if dias_cobertura < 3 or dias_cobertura > 12:
+                raise ValueError("Los días de cobertura deben estar entre 3 y 12")
                 
             # Validar fechas
             fecha_dataset = datetime.strptime(self.dataset_date.get(), '%d/%m/%Y').date()
