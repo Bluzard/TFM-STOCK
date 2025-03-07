@@ -231,8 +231,8 @@ class PlannerGUI:
             if not productos_optimizados:
                 raise ValueError("Error en la optimización")
             
-            # 4. Exportar resultados
-            exportar_resultados(
+            # 4. Exportar resultados (ahora devuelve info de ocupación)
+            resultado_ocupacion = exportar_resultados(
                 productos_optimizados=productos_optimizados,
                 productos=productos,
                 fecha_dataset=fecha_dataset,
@@ -241,7 +241,34 @@ class PlannerGUI:
                 dias_cobertura_base=dias_cobertura
             )
             
-            messagebox.showinfo("Éxito", "Plan generado y exportado correctamente")
+            # 5. Mostrar información de ocupación en un cuadro de diálogo
+            if resultado_ocupacion:
+                ocupacion_dataset = resultado_ocupacion.get('ocupacion_dataset', {})
+                ocupacion_inicio = resultado_ocupacion.get('ocupacion_inicio', {})
+                ocupacion_fin = resultado_ocupacion.get('ocupacion_fin', {})
+                porcentaje_cambio = resultado_ocupacion.get('porcentaje_cambio', 0)
+                
+                mensaje_ocupacion = f"""
+    OCUPACIÓN DEL ALMACÉN:
+    ---------------------
+    Día dataset ({fecha_dataset.strftime('%d/%m/%Y')}):    
+    {ocupacion_dataset.get('total_ubicaciones', 0)} ubicaciones ({ocupacion_dataset.get('total_cajas', 0)} cajas)
+
+    Inicio planificación ({fecha_inicio.strftime('%d/%m/%Y')}): 
+    {ocupacion_inicio.get('total_ubicaciones', 0)} ubicaciones ({ocupacion_inicio.get('total_cajas', 0)} cajas)
+
+    Fin planificación ({(fecha_inicio + timedelta(days=dias_planificacion-1)).strftime('%d/%m/%Y')}):    
+    {ocupacion_fin.get('total_ubicaciones', 0)} ubicaciones ({ocupacion_fin.get('total_cajas', 0)} cajas)
+
+    La ocupación al final de la planificación es un {'+' if porcentaje_cambio >= 0 else ''}{porcentaje_cambio}% 
+    respecto al inicio de la planificación.
+                """
+                
+                # Mostrar un mensaje con la información básica y opción para ver más detalles
+                respuesta = messagebox.showinfo("Plan generado exitosamente", 
+                                            f"Plan generado y exportado correctamente.\n\n{mensaje_ocupacion}")
+            else:
+                messagebox.showinfo("Éxito", "Plan generado y exportado correctamente")
             
         except Exception as e:
             logger.error(f"Error generando plan: {str(e)}")

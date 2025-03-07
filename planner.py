@@ -510,44 +510,118 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
         logger.error(f"Traceback completo: {traceback.format_exc()}")
         return []
     
-def calcular_ocupacion_almacen(productos, productos_info):
+def calcular_ocupacion_almacen(productos, fecha_tag, productos_info=None):
     """
-    Calcula métricas de ocupación de almacén
+    Calcula la ocupación del almacén en ubicaciones para un momento específico.
     
-    :param productos: Lista de productos producidos
-    :param productos_info: Diccionario con información adicional de productos
-    :return: Diccionario con métricas de ocupación
+    Args:
+        productos: Lista de objetos Producto
+        fecha_tag: Etiqueta para identificar qué stock usar ('dataset', 'inicio', 'fin')
+        productos_info: Diccionario con información adicional de productos (cajas/palet)
+        
+    Returns:
+        dict: Diccionario con información de ocupación
     """
-    total_palets = 0
-    total_stock = 0
+    if productos_info is None:
+        # Si no se proporciona info de productos, intentar cargarla
+        productos_info, _ = leer_indicaciones_articulos()
+        
+    total_ubicaciones = 0
+    total_cajas = 0
+    productos_procesados = 0
     
     for producto in productos:
-        # Obtener cajas por palet, usar 40 como valor por defecto
-        cajas_palet = productos_info.get(producto.cod_art, {}).get('cajas_palet', 40)
+        # Omitir productos descatalogados o sin información
+        if not hasattr(producto, 'cod_art') or producto.cod_art not in productos_info:
+            continue
+            
+        # Obtener cajas por palet (valor por defecto: 40)
+        cajas_palet = productos_info[producto.cod_art].get('cajas_palet', 40)
+        if cajas_palet <= 0:
+            cajas_palet = 40  # Evitar división por cero
+            
+        # Determinar qué stock usar según la etiqueta
+        stock = 0
+        if fecha_tag == 'dataset':
+            # Stock al momento del dataset
+            stock = producto.disponible + producto.calidad + producto.stock_externo
+        elif fecha_tag == 'inicio':
+            # Stock al inicio de la planificación (ya ajustado por demanda entre dataset e inicio)
+            if hasattr(producto, 'stock_inicial'):
+                stock = producto.stock_inicial
+        elif fecha_tag == 'fin':
+            # Stock al final de la planificación (inicial + producido)
+            if hasattr(producto, 'stock_inicial'):
+                stock_planeado = producto.cajas_a_producir if hasattr(producto, 'cajas_a_producir') else 0
+                stock = producto.stock_inicial + stock_planeado - (producto.demanda_media * producto.dias_planificacion if hasattr(producto, 'demanda_media') and hasattr(producto, 'dias_planificacion') else 0)
         
-        # Calcular stock total (inicial + producido)
-        stock_total = producto.stock_inicial + producto.cajas_a_producir
+        # Calcular ubicaciones ocupadas por este producto
+        ubicaciones = stock / cajas_palet
         
-        # Calcular número de palets
-        palets_producto = stock_total / cajas_palet
-        
-        total_palets += palets_producto
-        total_stock += stock_total
-    
-    # Métricas de penalización según documento original
-    penalizacion = 0
-    if total_palets > 1200:
-        penalizacion = -100
-    elif total_palets > 1000:
-        penalizacion = -50
-    elif total_palets > 800:
-        penalizacion = -10
+        # Solo contar si hay stock positivo
+        if stock > 0:
+            total_ubicaciones += ubicaciones
+            total_cajas += stock
+            productos_procesados += 1
     
     return {
-        'total_palets': round(total_palets, 2),
-        'total_stock': round(total_stock, 2),
-        'penalizacion_espacio': penalizacion
+        'fecha_tag': fecha_tag,
+        'total_ubicaciones': round(total_ubicaciones, 2),
+        'total_cajas': round(total_cajas, 2),
+        'productos_procesados': productos_procesados
     }
+def mostrar_comparativa_ocupacion(productos, dias_planificacion, productos_info=None):
+    """
+    Calcula y muestra la comparativa de ocupación del almacén en los tres momentos clave.
+    
+    Args:
+        productos: Lista de objetos Producto
+        dias_planificacion: Número de días de la planificación
+        productos_info: Diccionario con información adicional de productos
+        
+    Returns:
+        dict: Diccionario con los resultados comparativos
+    """
+    # Asegurarse de que los productos tengan el atributo dias_planificacion
+    for producto in productos:
+        producto.dias_planificacion = dias_planificacion
+    
+    # Calcular ocupación en los tres momentos
+    ocupacion_dataset = calcular_ocupacion_almacen(productos, 'dataset', productos_info)
+    ocupacion_inicio = calcular_ocupacion_almacen(productos, 'inicio', productos_info)
+    ocupacion_fin = calcular_ocupacion_almacen(productos, 'fin', productos_info)
+    
+    # Calcular porcentaje de cambio
+    if ocupacion_inicio['total_ubicaciones'] > 0:
+        porcentaje_cambio = ((ocupacion_fin['total_ubicaciones'] - ocupacion_inicio['total_ubicaciones']) 
+                            / ocupacion_inicio['total_ubicaciones']) * 100
+    else:
+        porcentaje_cambio = 0
+    
+    # Preparar resultado
+    resultado = {
+        'ocupacion_dataset': ocupacion_dataset,
+        'ocupacion_inicio': ocupacion_inicio,
+        'ocupacion_fin': ocupacion_fin,
+        'porcentaje_cambio': round(porcentaje_cambio, 2)
+    }
+    
+    # Crear mensaje para mostrar
+    mensaje = f"""
+    OCUPACIÓN DEL ALMACÉN:
+    ---------------------
+    Día dataset:    {ocupacion_dataset['total_ubicaciones']} ubicaciones ({ocupacion_dataset['total_cajas']} cajas)
+    Inicio planif.: {ocupacion_inicio['total_ubicaciones']} ubicaciones ({ocupacion_inicio['total_cajas']} cajas)
+    Fin planif.:    {ocupacion_fin['total_ubicaciones']} ubicaciones ({ocupacion_fin['total_cajas']} cajas)
+    
+    La ocupación al final de la planificación es un {'+' if porcentaje_cambio >= 0 else ''}{porcentaje_cambio}% 
+    respecto al inicio de la planificación.
+    """
+    
+    # Mostrar mensaje en consola
+    print(mensaje)
+    
+    return resultado
 
 def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_planificacion, dias_planificacion, dias_cobertura_base):
     try:
@@ -611,6 +685,11 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                     'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
                 })
         
+        # NUEVO: Calcular y mostrar la ocupación del almacén
+        for p in productos:
+            p.dias_planificacion = dias_planificacion
+        resultado_ocupacion = mostrar_comparativa_ocupacion(productos, dias_planificacion, productos_info)
+        
         # CAMBIO: Log para verificar el total de horas planificadas
         logger.info(f"Total de horas planificadas en exportar_resultados: {total_horas_planificadas:.2f}")
         
@@ -631,10 +710,13 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
         nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
         exportar_calendario(calendario, fecha_planificacion, nombre_calendario)
         
+        return resultado_ocupacion
+        
     except Exception as e:
         logger.error(f"Error exportando resultados: {str(e)}")
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
+        return None
 
 def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
     """
