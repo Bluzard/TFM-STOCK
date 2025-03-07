@@ -125,8 +125,6 @@ def calcular_cobertura_maxima(m_vta_15):
         logger.warning("m_vta_15 es None. Se asume cobertura máxima infinita.")
         return float('inf')  # Sin límite de cobertura máxima
     
-    logger.info(f"Calculando cobertura máxima para m_vta_15={m_vta_15}")  # <-- Log adicional
-
     if m_vta_15 >= 150:
         return 14.00
     elif 100 <= m_vta_15 < 150:
@@ -155,16 +153,39 @@ def redondear_media_hora_al_alza(horas):   # Para adeptar a la realidad del proc
 
 
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
-    """Aplica el método Simplex para optimizar la producción"""
     try:
+        # Consolidar productos con el mismo código antes de la optimización
+        productos_consolidados = {}
+        for producto in productos_validos:
+            if producto.cod_art not in productos_consolidados:
+                productos_consolidados[producto.cod_art] = producto
+            else:
+                # Combinar productos con el mismo código
+                existente = productos_consolidados[producto.cod_art]
+                existente.cajas_hora = (existente.cajas_hora + producto.cajas_hora) / 2
+                existente.cajas_hora_reales = (existente.cajas_hora_reales + producto.cajas_hora_reales) / 2
+                existente.m_vta_15 = max(existente.m_vta_15, producto.m_vta_15)
+                existente.stock_inicial = max(existente.stock_inicial, producto.stock_inicial)
+
+        # Convertir a lista de productos válidos sin restricciones infactibles
+        productos_validos = [
+            p for p in productos_consolidados.values() 
+            if p.demanda_media > 0 and p.cajas_hora_reales > 0
+        ]
+
         n_productos = len(productos_validos)
+        if n_productos == 0:
+            logger.error("No hay productos válidos para optimizar")
+            return None
+
         cobertura_minima = dias_cobertura_base + dias_planificacion
 
         # Función objetivo
         coeficientes = []
         for producto in productos_validos:
             if producto.demanda_media > 0:
-                prioridad = max(0, 1/producto.cobertura_inicial)
+                # Priorizar productos con menor cobertura
+                prioridad = max(0, 1 / (producto.cobertura_inicial + 0.01))
             else:
                 prioridad = 0
             coeficientes.append(-prioridad)
@@ -174,63 +195,36 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         A_eq[0] = [1 / producto.cajas_hora_reales for producto in productos_validos]
         b_eq = [horas_disponibles]
 
-        # <-- CAMBIO: Verificar valores en A_eq y b_eq
-        logger.info(f"A_eq: {A_eq}")
-        logger.info(f"b_eq: {b_eq}")
-
         A_ub = []
         b_ub = []
         bounds = []
 
         for i, producto in enumerate(productos_validos):
-            # Calcular min_cajas y max_cajas
-            if producto.demanda_media > 0 and producto.cobertura_inicial < 60:
-                cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
-                min_cajas = 2 * producto.cajas_hora_reales
-                max_cajas = min(
-                    horas_disponibles * producto.cajas_hora_reales,
-                    producto.demanda_media * cobertura_maxima - producto.stock_inicial
-                )
-                max_cajas = max(min_cajas, max_cajas)  # Asegurar que max_cajas >= min_cajas
-            else:
-                min_cajas = 0
-                max_cajas = 0
+            # Calcular límites de producción más flexibles
+            cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
+            
+            # Calcular cajas mínimas y máximas
+            min_cajas = max(2 * producto.cajas_hora_reales, 0)
+            max_cajas = min(
+                horas_disponibles * producto.cajas_hora_reales,
+                max(producto.demanda_media * cobertura_maxima - producto.stock_inicial, min_cajas)
+            )
 
-            # Agregar bounds
             bounds.append((min_cajas, max_cajas))
 
-            # Verificar si es necesario agregar una restricción de desigualdad
-            if producto.demanda_media > 0:
-                stock_min = max((producto.demanda_media * cobertura_minima) - producto.stock_inicial, 0)
-                if stock_min > 0:  # Solo agregar la restricción si es necesaria
-                    if max_cajas < stock_min:
-                        logger.warning(f"Producto {producto.cod_art}: max_cajas ({max_cajas}) < stock_min ({stock_min})")
-                    else:
-                        row = [0] * n_productos
-                        row[i] = -1  # Restricción: -xᵢ ≤ b_ub[i]
-                        A_ub.append(row)
-                        b_ub.append(-stock_min)
-
-            # Log para verificar valores
-            logger.info(f"Producto {producto.cod_art}: min_cajas={min_cajas}, max_cajas={max_cajas}, stock_min={stock_min}")
+            # Restricción de stock mínimo más flexible
+            stock_min = max((producto.demanda_media * cobertura_minima) - producto.stock_inicial, 0)
+            if stock_min > 0:
+                row = [0] * n_productos
+                row[i] = -1
+                A_ub.append(row)
+                b_ub.append(-stock_min)
 
         # Convertir a arrays de numpy
-        A_ub = np.array(A_ub)
-        b_ub = np.array(b_ub)
+        A_ub = np.array(A_ub) if A_ub else None
+        b_ub = np.array(b_ub) if b_ub else None
 
-        # Verificar valores en A_ub y b_ub
-        logger.info(f"A_ub: {A_ub}")
-        logger.info(f"b_ub: {b_ub}")
-
-        # Verificar horas_disponibles * cajas_hora_reales para todos los productos
-        for producto in productos_validos:
-            horas_cajas = horas_disponibles * producto.cajas_hora_reales
-            logger.info(f"Producto {producto.cod_art}: horas_disponibles * cajas_hora_reales = {horas_cajas}")
-
-        # Verificar valores en bounds
-        logger.info(f"Bounds: {bounds}")
-
-        # Optimización
+        # Optimización con manejo de restricciones opcionales
         result = linprog(
             c=coeficientes,
             A_eq=A_eq,
@@ -244,101 +238,26 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         if result.success:
             horas_redondeadas = 0
             
-            # CAMBIO: Primero procesar todos los productos y redondear las horas
             for i, producto in enumerate(productos_validos):
+                # Cálculo de cajas y horas con redondeo consistente
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
 
-                # Redondear las horas necesarias a tramos de media hora al alza
+                # Redondear horas al múltiplo de 0.5 más cercano
                 producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
 
-                # Recalcular las cajas a producir basadas en las horas redondeadas
-                producto.cajas_a_producir = producto.horas_necesarias * producto.cajas_hora_reales
+                # Recalcular cajas basadas en horas redondeadas
+                producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
 
-                # Acumular las horas redondeadas
+                # Acumular horas
                 horas_redondeadas += producto.horas_necesarias
 
+                # Calcular cobertura final
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
-                    producto.stock_inicial + producto.cajas_a_producir
+                        producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
-                    
-            logger.info(f"Horas redondeadas global: {horas_redondeadas}")
-
-            # Verificar que no se superen las horas disponibles
-            if horas_redondeadas > horas_disponibles:
-                logger.warning(f"Horas planificadas ({horas_redondeadas:.2f}) superan las horas disponibles ({horas_disponibles:.2f}).")
-                
-                # Ordenar productos por horas necesarias en orden descendente
-                # CAMBIO: hacer una copia para no afectar el orden original
-                productos_ordenados = sorted(productos_validos, key=lambda p: p.horas_necesarias, reverse=True)
-                
-                # Obtener los 3 productos con más horas planificadas para restar proporcionalmente el exceso de horas
-                top_productos = productos_ordenados[:3]
-    
-                # Calcular la diferencia a ajustar
-                diferencia_horas = horas_redondeadas - horas_disponibles
-                logger.info(f"Diferencia horas: {diferencia_horas}")
-    
-                # Paso 1: Ajustar el primer producto
-                producto_1 = top_productos[0]
-                logger.info(f"producto_1.horas_necesarias: {producto_1.horas_necesarias}")
-                proporcion_1 = producto_1.horas_necesarias / sum(p.horas_necesarias for p in top_productos)
-                horas_a_restar_1 = diferencia_horas * proporcion_1
-                horas_a_restar_1 = redondear_media_hora_al_alza(horas_a_restar_1)
-                
-                # CAMBIO: Asegurarse que no restamos más de lo disponible
-                if horas_a_restar_1 > producto_1.horas_necesarias:
-                    horas_a_restar_1 = producto_1.horas_necesarias
-                
-                producto_1.horas_necesarias -= horas_a_restar_1
-                logger.info(f"producto_1.horas_necesarias tras restar proporción: {producto_1.horas_necesarias}")
-                producto_1.cajas_a_producir = producto_1.horas_necesarias * producto_1.cajas_hora_reales
-                diferencia_horas -= horas_a_restar_1
-                logger.info(f"Horas redondeadas primer producto: {horas_a_restar_1}")
-                horas_redondeadas -= horas_a_restar_1
-                logger.info(f"Horas redondeadas tras primer ajuste: {horas_redondeadas}")
-    
-                # Paso 2: Ajustar el segundo producto si aún hay diferencia
-                if diferencia_horas > 0 and len(top_productos) > 1:
-                    producto_2 = top_productos[1]
-                    # CAMBIO: Calcular la proporción sobre los productos restantes
-                    proporcion_2 = producto_2.horas_necesarias / max(sum(p.horas_necesarias for p in top_productos[1:]), 0.01)
-                    horas_a_restar_2 = diferencia_horas * proporcion_2
-                    horas_a_restar_2 = redondear_media_hora_al_alza(horas_a_restar_2)
-                    
-                    # CAMBIO: Asegurarse que no restamos más de lo disponible
-                    if horas_a_restar_2 > producto_2.horas_necesarias:
-                        horas_a_restar_2 = producto_2.horas_necesarias
-                    
-                    producto_2.horas_necesarias -= horas_a_restar_2
-                    producto_2.cajas_a_producir = producto_2.horas_necesarias * producto_2.cajas_hora_reales
-                    diferencia_horas -= horas_a_restar_2
-                    logger.info(f"Horas redondeadas segundo producto: {horas_a_restar_2}")
-                    horas_redondeadas -= horas_a_restar_2
-                    logger.info(f"Horas redondeadas tras segundo ajuste: {horas_redondeadas}")
-    
-                # Paso 3: Ajustar el tercer producto si aún hay diferencia
-                if diferencia_horas > 0 and len(top_productos) > 2:
-                    producto_3 = top_productos[2]
-                    horas_a_restar_3 = min(diferencia_horas, producto_3.horas_necesarias)  # CAMBIO: No restar más de lo disponible
-                    producto_3.horas_necesarias -= horas_a_restar_3
-                    producto_3.cajas_a_producir = producto_3.horas_necesarias * producto_3.cajas_hora_reales
-                    diferencia_horas -= horas_a_restar_3
-                    logger.info(f"Horas redondeadas tercer producto: {horas_a_restar_3}")
-                    horas_redondeadas -= horas_a_restar_3
-                    logger.info(f"Horas redondeadas tras tercer ajuste: {horas_redondeadas}")
-    
-                # CAMBIO: Recalcular horas_redondeadas correctamente
-                horas_redondeadas = sum(p.horas_necesarias for p in productos_validos)
-                logger.info(f"Horas redondeadas recalculadas: {horas_redondeadas}")
-                
-                # >>> VERIFICACIÓN FINAL: Asegurar que las horas ajustadas no sobrepasan el límite
-                if abs(horas_redondeadas - horas_disponibles) > 0.01:  # Tolerancia pequeña para errores de punto flotante
-                    logger.error(f"Error: No se pudo ajustar correctamente. Horas finales: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
-                else:
-                    logger.info(f"Optimización corregida - Horas finales: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
-
+            
             logger.info(f"Optimización exitosa - Horas planificadas: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
             return productos_validos
         else:
@@ -350,8 +269,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None
-            
-
 def optimizar_orden_grupos(productos):
     """
     Optimiza el orden de los productos minimizando el tiempo perdido en cambios
@@ -685,13 +602,18 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                     'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
                 })
         
+        # NUEVO: Añadir logging detallado de horas
+        logger.info(f"Total de horas planificadas: {total_horas_planificadas:.2f}")
+        print("\n==== DETALLE DE HORAS POR PRODUCTO ====")
+        for producto_opt in productos_optimizados:
+            if hasattr(producto_opt, 'horas_necesarias') and producto_opt.horas_necesarias > 0:
+                print(f"Producto {producto_opt.cod_art}: {producto_opt.horas_necesarias:.2f} horas")
+        print("==== FIN DETALLE DE HORAS ====\n")
+        
         # NUEVO: Calcular y mostrar la ocupación del almacén
         for p in productos:
             p.dias_planificacion = dias_planificacion
         resultado_ocupacion = mostrar_comparativa_ocupacion(productos, dias_planificacion, productos_info)
-        
-        # CAMBIO: Log para verificar el total de horas planificadas
-        logger.info(f"Total de horas planificadas en exportar_resultados: {total_horas_planificadas:.2f}")
         
         # Convertir a DataFrame y ordenar
         df = pd.DataFrame(datos)
@@ -704,7 +626,31 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
         
         # Generar calendario de producción
         productos_planificados = [p for p in productos_optimizados if hasattr(p, 'horas_necesarias') and p.horas_necesarias > 0]
+        
+        # NUEVO: Logging de productos planificados antes de generar calendario
+        print("\n==== PRODUCTOS PARA CALENDARIO ====")
+        for p in productos_planificados:
+            print(f"Producto {p.cod_art}: {p.horas_necesarias:.2f} horas, {p.cajas_a_producir:.2f} cajas")
+        print("==== FIN PRODUCTOS PARA CALENDARIO ====\n")
+        
         calendario = generar_calendario_produccion(productos_planificados)
+        
+        # NUEVO: Validación de horas del calendario
+        total_horas_calendario = sum(
+            sum(producto['horas'] for producto in dia) 
+            for dia in calendario.values()
+        )
+        
+        print("\n==== DETALLE DE HORAS POR DÍA ====")
+        for dia, productos in calendario.items():
+            horas_dia = sum(p['horas'] for p in productos)
+            print(f"Día {dia}: {horas_dia:.2f} horas")
+        print(f"Total horas en calendario: {total_horas_calendario:.2f}")
+        print("==== FIN DETALLE DE HORAS POR DÍA ====\n")
+        
+        # Comparar horas de optimización con calendario
+        if abs(total_horas_planificadas - total_horas_calendario) > 0.01:
+            logger.warning(f"INCONSISTENCIA DE HORAS: Optimización ({total_horas_planificadas:.2f}) vs Calendario ({total_horas_calendario:.2f})")
         
         # Exportar calendario
         nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
@@ -717,24 +663,24 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None
-
 def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
-    """
-    Genera un calendario de producción diario basado en los productos optimizados.
-    Organiza la producción para minimizar cambios entre familias de productos.
-    
-    Args:
-        productos_planificados (list): Lista de productos con horas de producción asignadas
-        horas_por_dia (int): Horas disponibles por día de producción
-    
-    Returns:
-        dict: Calendario de producción organizado por días
-    """
     try:
-        # Primero ordenamos los productos por Orden_Planificacion, COD_GRU y Cobertura_Inicial
-        # INICIO -> "" -> FINAL
-        # VIME -> MEC
-        # Menor cobertura primero
+        # Consolidar productos por código de artículo
+        productos_consolidados = {}
+        for producto in productos_planificados:
+            if not hasattr(producto, 'horas_necesarias') or producto.horas_necesarias <= 0:
+                continue
+            
+            if producto.cod_art not in productos_consolidados:
+                productos_consolidados[producto.cod_art] = producto
+            else:
+                # Sumar horas y cajas de productos con el mismo código
+                existente = productos_consolidados[producto.cod_art]
+                existente.horas_necesarias += producto.horas_necesarias
+                existente.cajas_a_producir += producto.cajas_a_producir
+
+        # Convertir a lista de productos únicos
+        productos_planificados = list(productos_consolidados.values())
         
         # Definir orden de planificación
         orden_plan = {"INICIO": 0, "": 1, "FINAL": 2}
@@ -754,70 +700,40 @@ def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
         calendario = {}
         dia_actual = 1
         horas_disponibles_dia = horas_por_dia
-        ultimo_grupo = None
-        
-        # DESACTIVAMOS temporalmente el descuento por cambio de grupo para pruebas
-        # Tiempo perdido por cambio de grupo (minutos)
-        # CAMBIO_VIME_MEC = 8  # minutos
-        # CAMBIO_MEC_VIME = 10  # minutos
+        total_horas_planificadas = 0
         
         for producto in sorted_productos:
-            if not hasattr(producto, 'horas_necesarias') or producto.horas_necesarias <= 0:
-                continue
-                
-            horas_pendientes = producto.horas_necesarias
-            
-            # Redondear a múltiplos de 0.5
-            horas_pendientes = redondear_media_hora_al_alza(horas_pendientes)
-            
-            # Para evitar duplicaciones, creamos un nuevo id único para cada producto
-            producto_id = f"{producto.cod_art}_{id(producto)}"
-            logger.info(f"Planificando producto: {producto.cod_art} con {horas_pendientes} horas")
+            # Redondear horas totales
+            horas_pendientes = redondear_media_hora_al_alza(producto.horas_necesarias)
+            horas_totales = horas_pendientes
             
             while horas_pendientes > 0:
-                # Si no hay suficientes horas en el día actual, pasar al siguiente día
-                if horas_disponibles_dia <= 0:
+                # Cambiar de día si no hay horas disponibles
+                if horas_disponibles_dia < 2:  # Cambio: requiere al menos 2 horas
                     dia_actual += 1
                     horas_disponibles_dia = horas_por_dia
-                    ultimo_grupo = None  # Reiniciar el grupo al empezar un nuevo día
                 
-                # DESACTIVADO: Calcular tiempo de cambio si hay cambio de grupo
-                tiempo_cambio_horas = 0
-                # if ultimo_grupo is not None and ultimo_grupo != producto.cod_gru:
-                #     if ultimo_grupo == "VIME" and producto.cod_gru == "MEC":
-                #         tiempo_cambio_horas = CAMBIO_VIME_MEC / 60.0  # Convertir a horas
-                #     elif ultimo_grupo == "MEC" and producto.cod_gru == "VIME":
-                #         tiempo_cambio_horas = CAMBIO_MEC_VIME / 60.0  # Convertir a horas
-                
-                # DESACTIVADO: Restar el tiempo de cambio de las horas disponibles
-                # if tiempo_cambio_horas > 0:
-                #     horas_disponibles_dia -= tiempo_cambio_horas
-                #     if horas_disponibles_dia < 0:
-                #         dia_actual += 1
-                #         horas_disponibles_dia = horas_por_dia
-                
-                # Determinar cuántas horas asignar en este día
+                # Determinar horas a asignar
                 horas_a_asignar = min(horas_pendientes, horas_disponibles_dia)
                 
-                # Asegurarse de que no producimos menos de 2 horas (lote mínimo)
-                # Si quedan menos de 2 horas disponibles pero el producto necesita más,
-                # pasar al siguiente día
+                # Asegurar lote mínimo de 2 horas
                 if horas_a_asignar < 2 and horas_pendientes > horas_a_asignar:
                     dia_actual += 1
                     horas_disponibles_dia = horas_por_dia
                     continue
                 
-                # Redondear a múltiplos de 0.5
+                # Redondear horas 
                 horas_a_asignar = redondear_media_hora_al_alza(horas_a_asignar)
                 
-                # Añadir al calendario
+                # Calcular proporción de cajas
+                proporcion = horas_a_asignar / horas_totales
+                cajas_asignadas = round(proporcion * producto.cajas_a_producir)
+                
+                # Inicializar día si no existe
                 if dia_actual not in calendario:
                     calendario[dia_actual] = []
                 
-                # Calculamos proporción exacta de cajas
-                proporcion = horas_a_asignar / producto.horas_necesarias
-                cajas_asignadas = proporcion * producto.cajas_a_producir
-                
+                # Añadir al calendario
                 calendario[dia_actual].append({
                     'cod_art': producto.cod_art,
                     'nom_art': producto.nom_art,
@@ -826,24 +742,19 @@ def generar_calendario_produccion(productos_planificados, horas_por_dia=24):
                     'cajas': cajas_asignadas
                 })
                 
-                # Actualizar variables de seguimiento
+                # Actualizar seguimiento
                 horas_pendientes -= horas_a_asignar
                 horas_disponibles_dia -= horas_a_asignar
-                ultimo_grupo = producto.cod_gru
-                
-                # Log de depuración
-                logger.debug(f"Día {dia_actual}: Producto {producto.cod_art}, horas asignadas: {horas_a_asignar}, " +
-                          f"horas pendientes: {horas_pendientes}, horas disponibles: {horas_disponibles_dia}")
+                total_horas_planificadas += horas_a_asignar
         
         # Verificar la asignación total para cada día
-        total_horas_asignadas = 0
         for dia, productos in calendario.items():
             horas_dia = sum(p['horas'] for p in productos)
-            logger.info(f"Día {dia}: Total horas asignadas: {horas_dia}/{horas_por_dia}")
-            total_horas_asignadas += horas_dia
+            logger.info(f"Día {dia}: Total horas asignadas: {horas_dia:.1f}/{horas_por_dia}")
         
-        logger.info(f"Calendario generado: {len(calendario)} días de producción, {total_horas_asignadas} horas totales asignadas")
+        logger.info(f"Calendario generado: {len(calendario)} días de producción, {total_horas_planificadas:.1f} horas totales asignadas")
         return calendario
+    
     except Exception as e:
         logger.error(f"Error generando calendario: {str(e)}")
         import traceback
