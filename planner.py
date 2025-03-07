@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 import math
+import copy
 from scipy.optimize import linprog
 from csv_loader import leer_indicaciones_articulos
 
@@ -153,122 +154,210 @@ def redondear_media_hora_al_alza(horas):   # Para adeptar a la realidad del proc
 
 
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
+    """
+    Aplica el método Simplex para optimizar la producción.
+    Versión simplificada que maneja problemas infactibles relajando restricciones.
+    """
     try:
-        # Consolidar productos con el mismo código antes de la optimización
+        # Consolidar productos con el mismo código para evitar duplicados
         productos_consolidados = {}
         for producto in productos_validos:
+            if not hasattr(producto, 'cod_art') or not producto.cod_art:
+                continue
+                
             if producto.cod_art not in productos_consolidados:
                 productos_consolidados[producto.cod_art] = producto
             else:
-                # Combinar productos con el mismo código
+                # Existente y nuevo - mantener valores más críticos
                 existente = productos_consolidados[producto.cod_art]
-                existente.cajas_hora = (existente.cajas_hora + producto.cajas_hora) / 2
-                existente.cajas_hora_reales = (existente.cajas_hora_reales + producto.cajas_hora_reales) / 2
-                existente.m_vta_15 = max(existente.m_vta_15, producto.m_vta_15)
                 existente.stock_inicial = max(existente.stock_inicial, producto.stock_inicial)
-
-        # Convertir a lista de productos válidos sin restricciones infactibles
+                existente.demanda_media = max(existente.demanda_media, producto.demanda_media)
+                
+                # Para cobertura, usar el valor más bajo (más urgente)
+                if (isinstance(existente.cobertura_inicial, (int, float)) and 
+                    isinstance(producto.cobertura_inicial, (int, float))):
+                    existente.cobertura_inicial = min(existente.cobertura_inicial, producto.cobertura_inicial)
+                
+                # Si ya tiene producción asignada, mantenerla
+                if hasattr(producto, 'cajas_a_producir') and producto.cajas_a_producir > 0:
+                    if not hasattr(existente, 'cajas_a_producir') or existente.cajas_a_producir == 0:
+                        existente.cajas_a_producir = producto.cajas_a_producir
+                        existente.horas_necesarias = producto.horas_necesarias
+        
+        # Convertir diccionario a lista y filtrar productos válidos
         productos_validos = [
             p for p in productos_consolidados.values() 
-            if p.demanda_media > 0 and p.cajas_hora_reales > 0
+            if hasattr(p, 'demanda_media') and 
+               hasattr(p, 'cajas_hora_reales') and 
+               p.demanda_media > 0 and 
+               p.cajas_hora_reales > 0
         ]
-
+        
         n_productos = len(productos_validos)
         if n_productos == 0:
             logger.error("No hay productos válidos para optimizar")
-            return None
-
-        cobertura_minima = dias_cobertura_base + dias_planificacion
-
-        # Función objetivo
-        coeficientes = []
-        for producto in productos_validos:
-            if producto.demanda_media > 0:
-                # Priorizar productos con menor cobertura
-                prioridad = max(0, 1 / (producto.cobertura_inicial + 0.01))
-            else:
-                prioridad = 0
-            coeficientes.append(-prioridad)
-
-        # Restricciones
-        A_eq = np.zeros((1, n_productos))
-        A_eq[0] = [1 / producto.cajas_hora_reales for producto in productos_validos]
-        b_eq = [horas_disponibles]
-
-        A_ub = []
-        b_ub = []
-        bounds = []
-
-        for i, producto in enumerate(productos_validos):
-            # Calcular límites de producción más flexibles
-            cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
+            return []
+        
+        logger.info(f"Optimizando {n_productos} productos")
+        
+        # Ordenar por cobertura (menor primero) para priorización
+        productos_validos.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+        
+        # Primera fase: Intentar optimización con restricciones relajadas (solo horas)
+        try:
+            cobertura_minima = dias_cobertura_base + dias_planificacion
             
-            # Calcular cajas mínimas y máximas
-            min_cajas = max(2 * producto.cajas_hora_reales, 0)
-            max_cajas = min(
-                horas_disponibles * producto.cajas_hora_reales,
-                max(producto.demanda_media * cobertura_maxima - producto.stock_inicial, min_cajas)
+            # Función objetivo: priorizar productos con menor cobertura
+            coeficientes = []
+            for producto in productos_validos:
+                if producto.demanda_media > 0:
+                    prioridad = max(0, 1 / (producto.cobertura_inicial + 0.01))
+                else:
+                    prioridad = 0
+                coeficientes.append(-prioridad)
+    
+            # Restricción de horas disponibles totales (única restricción obligatoria)
+            A_eq = np.zeros((1, n_productos))
+            A_eq[0] = [1 / producto.cajas_hora_reales for producto in productos_validos]
+            b_eq = [horas_disponibles]
+            
+            # Límites de producción (bounds)
+            bounds = []
+            
+            for producto in productos_validos:
+                # Calcular cobertura máxima menos restrictiva
+                cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
+                
+                # Mínimo: 2 horas de producción (mínimo viable)
+                min_cajas = 2 * producto.cajas_hora_reales
+                
+                # Máximo: lo que permita la capacidad disponible
+                max_cajas = horas_disponibles * producto.cajas_hora_reales
+                
+                # Si había stock mínimo requerido, intentar respetarlo pero sin ser obligatorio
+                stock_min = max((producto.demanda_media * cobertura_minima) - producto.stock_inicial, 0)
+                if stock_min > 0:
+                    # Priorizar este producto aumentando su mínimo, pero sin hacer infactible
+                    min_cajas = min(min_cajas + stock_min * 0.5, max_cajas)
+                
+                bounds.append((min_cajas, max_cajas))
+            
+            # Ejecutar optimización solo con restricción de horas y bounds
+            result = linprog(
+                c=coeficientes,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                bounds=bounds,
+                method='highs'
             )
-
-            bounds.append((min_cajas, max_cajas))
-
-            # Restricción de stock mínimo más flexible
-            stock_min = max((producto.demanda_media * cobertura_minima) - producto.stock_inicial, 0)
-            if stock_min > 0:
-                row = [0] * n_productos
-                row[i] = -1
-                A_ub.append(row)
-                b_ub.append(-stock_min)
-
-        # Convertir a arrays de numpy
-        A_ub = np.array(A_ub) if A_ub else None
-        b_ub = np.array(b_ub) if b_ub else None
-
-        # Optimización con manejo de restricciones opcionales
-        result = linprog(
-            c=coeficientes,
-            A_eq=A_eq,
-            b_eq=b_eq,
-            A_ub=A_ub,
-            b_ub=b_ub,
-            bounds=bounds,
-            method='highs'
-        )
-
-        if result.success:
-            horas_redondeadas = 0
             
+            if result.success:
+                logger.info("Optimización con restricciones relajadas exitosa")
+            else:
+                # Si aún falla, usar distribución proporcional manual
+                raise ValueError(f"Optimización infactible: {result.message}")
+                
+        except Exception as e:
+            logger.warning(f"Optimización matemática falló: {str(e)}. Usando distribución proporcional.")
+            
+            # Distribución proporcional basada en prioridad
+            horas_asignadas = 0
+            
+            # Asignar proporcionalmente, priorizando productos con menor cobertura
+            prioridades = []
+            for producto in productos_validos:
+                if producto.demanda_media > 0:
+                    if producto.cobertura_inicial < 3:  # Productos críticos
+                        prioridad = 10.0 / (producto.cobertura_inicial + 0.1)
+                    else:  # Productos normales
+                        prioridad = 1.0 / (producto.cobertura_inicial + 0.1)
+                else:
+                    prioridad = 0.1
+                prioridades.append(prioridad)
+            
+            # Normalizar prioridades
+            total_prioridad = sum(prioridades)
+            for i in range(len(prioridades)):
+                prioridades[i] /= total_prioridad
+            
+            # Asignar horas según prioridad
             for i, producto in enumerate(productos_validos):
-                # Cálculo de cajas y horas con redondeo consistente
+                producto.horas_necesarias = horas_disponibles * prioridades[i]
+                
+                # Asegurar mínimo de 2 horas si posible
+                if producto.horas_necesarias < 2:
+                    producto.horas_necesarias = 0  # No asignar si es menos de 2 horas
+                
+                # Redondear a múltiplos de 0.5
+                producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                
+                # Calcular cajas_a_producir
+                producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                
+                # Sumar horas asignadas
+                horas_asignadas += producto.horas_necesarias
+            
+            # Si hay exceso de horas, ajustar
+            if horas_asignadas > horas_disponibles:
+                # Ordenar por prioridad (menor cobertura primero)
+                productos_ordenados = sorted(
+                    productos_validos,
+                    key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'),
+                    reverse=True  # Reducir primero los de mayor cobertura
+                )
+                
+                # Reducir horas hasta cumplir con el límite
+                exceso = horas_asignadas - horas_disponibles
+                for producto in productos_ordenados:
+                    if exceso <= 0:
+                        break
+                    
+                    if producto.horas_necesarias >= 2.5:  # Evitar reducir por debajo de 2 horas
+                        reduccion = min(0.5, exceso, producto.horas_necesarias - 2)
+                        if reduccion > 0:
+                            producto.horas_necesarias -= reduccion
+                            producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                            exceso -= reduccion
+            
+            # Usar valores calculados manualmente
+            result = None
+        
+        # Procesar resultados, del optimizador o manual
+        productos_con_produccion = []
+        total_horas_planificadas = 0
+        
+        for i, producto in enumerate(productos_validos):
+            # Si tenemos resultado del optimizador
+            if result and result.success:
                 producto.cajas_a_producir = max(0, round(result.x[i]))
                 producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
-
-                # Redondear horas al múltiplo de 0.5 más cercano
                 producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
-
-                # Recalcular cajas basadas en horas redondeadas
                 producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
-
-                # Acumular horas
-                horas_redondeadas += producto.horas_necesarias
-
+            
+            # Si el producto tiene horas asignadas, incluirlo
+            if hasattr(producto, 'horas_necesarias') and producto.horas_necesarias > 0:
                 # Calcular cobertura final
                 if producto.demanda_media > 0:
                     producto.cobertura_final_plan = (
                         producto.stock_inicial + producto.cajas_a_producir
                     ) / producto.demanda_media
-            
-            logger.info(f"Optimización exitosa - Horas planificadas: {horas_redondeadas:.2f}/{horas_disponibles:.2f}")
-            return productos_validos
-        else:
-            logger.error(f"Error en optimización: {result.message}")
-            return None
-
+                
+                total_horas_planificadas += producto.horas_necesarias
+                productos_con_produccion.append(producto)
+        
+        logger.info(f"Planificación completada: {total_horas_planificadas:.2f} horas / {horas_disponibles:.2f} disponibles")
+        logger.info(f"Productos con producción asignada: {len(productos_con_produccion)}")
+        
+        return productos_con_produccion
+    
     except Exception as e:
         logger.error(f"Error en Simplex: {str(e)}")
         import traceback
         logger.error(f"Traceback completo: {traceback.format_exc()}")
-        return None
+        
+        # En caso de error, devolver lista vacía
+        return []
+
 def optimizar_orden_grupos(productos):
     """
     Optimiza el orden de los productos minimizando el tiempo perdido en cambios
@@ -341,90 +430,193 @@ def ordenar_productos(df):
     
     return df_ordenado
 
-def verificar_pedidos(productos, df_pedidos, fecha_dataset, dias_planificacion):
+def verificar_pedidos(productos, df_pedidos, fecha_dataset, fecha_inicio, dias_planificacion):
     """
-    Verifica si los pedidos confirmados provocan rotura de stock
+    Verifica si los pedidos confirmados provocan rotura de stock.
+    IMPORTANTE: Solo considera fechas a partir de fecha_inicio, ignorando fechas anteriores.
+    
+    Args:
+        productos: Lista de productos a verificar
+        df_pedidos: DataFrame con los pedidos pendientes
+        fecha_dataset: Fecha del dataset (punto de partida)
+        fecha_inicio: Fecha de inicio de la planificación (fecha desde la cual nos interesa)
+        dias_planificacion: Número de días a planificar
+        
+    Returns:
+        Lista de productos adicionales a planificar
     """
     try:
+        if df_pedidos is None or df_pedidos.empty:
+            logger.info("No hay datos de pedidos pendientes para verificar")
+            return []
+            
+        logger.info(f"Verificando pedidos pendientes para {len(productos)} productos desde {fecha_inicio.strftime('%d/%m/%Y')}")
+        
+        # Convertir fechas a datetime si es necesario
         if isinstance(fecha_dataset, date):
             fecha_dataset = datetime.combine(fecha_dataset, datetime.min.time())
-            
-        # CORRECCIÓN: No intentar obtener basename de un DataFrame
-        logger.info(f"Procesando datos de pedidos pendientes")
-        logger.info(f"Pedidos pendientes cargados: {len(df_pedidos)} productos")
+        if isinstance(fecha_inicio, date):
+            fecha_inicio = datetime.combine(fecha_inicio, datetime.min.time())
         
-        # Identificar columnas de fechas
+        # Verificar que fecha_inicio es válida
+        if fecha_inicio < fecha_dataset:
+            logger.warning(f"Fecha inicio ({fecha_inicio}) es anterior a fecha dataset ({fecha_dataset})")
+            fecha_inicio = fecha_dataset + timedelta(days=1)
+            logger.info(f"Ajustada fecha inicio a {fecha_inicio.strftime('%d/%m/%Y')}")
+        
+        # Identificar columnas de fechas en el archivo de pedidos
         fecha_cols = [col for col in df_pedidos.columns if col not in ['COD_ART', 'NOM_ART']]
-        logger.info(f"Columnas de fechas: {fecha_cols}")
+        logger.info(f"Columnas de fechas identificadas: {len(fecha_cols)}")
         
-        # Lista de productos que deben planificarse adicionalmente
+        # Preparar un diccionario para evitar duplicados
+        productos_dict = {p.cod_art: p for p in productos if hasattr(p, 'cod_art')}
+        
+        # Lista para productos adicionales a planificar
         productos_a_planificar = []
-
-        # Recorrer cada producto
-        for producto in productos:
-            if producto.demanda_media <= 0:
-                continue  # No se considera si no hay demanda media
-
-            # Obtener los pedidos para este producto
-            pedidos_producto = df_pedidos[df_pedidos['COD_ART'] == str(producto.cod_art)]
+        codigos_procesados = set()  # Registro de productos ya verificados
+        
+        # Fecha fin de planificación
+        fecha_fin = fecha_inicio + timedelta(days=dias_planificacion - 1)
+        logger.info(f"Período de planificación: {fecha_inicio.strftime('%d/%m/%Y')} - {fecha_fin.strftime('%d/%m/%Y')}")
+        
+        # Analizar cada producto
+        for cod_art, producto in productos_dict.items():
+            # Evitar procesar productos ya analizados o sin demanda
+            if cod_art in codigos_procesados or not hasattr(producto, 'demanda_media') or producto.demanda_media <= 0:
+                continue
+                
+            codigos_procesados.add(cod_art)
+            
+            # Verificar si hay pedidos para este producto
+            pedidos_producto = df_pedidos[df_pedidos['COD_ART'] == str(cod_art)]
             if pedidos_producto.empty:
-                continue  # No hay pedidos para este producto
-
-            # Inicializar el stock previsto
+                continue
+            
+            # Variables para simular el stock durante el período
             stock_previsto = producto.stock_inicial
             stock_seguridad = producto.demanda_media * 3
-
-            # Recorrer día a día
+            
+            # Flag para saber si hay riesgo de ruptura dentro del período de planificación
+            hay_riesgo_ruptura = False
+            fecha_ruptura = None
+            
+            # Analizar día a día el stock y pedidos, SOLO DESDE FECHA_INICIO
             for i in range(dias_planificacion):
-                fecha_actual = fecha_dataset + timedelta(days=i)
+                fecha_actual = fecha_inicio + timedelta(days=i)
                 fecha_str = fecha_actual.strftime('%d/%m/%Y')
-
-                # Restar la demanda media
+                
+                # Reducir stock por demanda media diaria
                 stock_previsto -= producto.demanda_media
-
-                # Sumar la OF si la fecha es igual o superior a la del dataset
-                if producto.primera_of != '(en blanco)':
-                    of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
-                    if of_date <= fecha_actual:
-                        stock_previsto += producto.of_reales
-
-                # Verificar si el stock previsto es menor que el stock de seguridad
-                if stock_previsto < stock_seguridad:
-                    logger.warning(f"El día {fecha_str}, el stock de seguridad ha sido sobrepasado para el producto {producto.cod_art}.")
-
-                    # Calcular la cantidad a fabricar
-                    dias_faltantes = dias_planificacion - i
-                    cantidad_a_fabricar = producto.demanda_media * min(dias_faltantes + 7, dias_planificacion)
-                    
-                    # Para los pedidos específicos, buscar en todas las columnas de fecha
-                    pedido_dia = 0
-                    for col in fecha_cols:
-                        try:
-                            # Intentar obtener el valor del pedido para esta fecha
-                            if col in pedidos_producto.columns and not pedidos_producto[col].empty:
+                
+                # Verificar si hay órdenes de fabricación programadas
+                if hasattr(producto, 'primera_of') and producto.primera_of != '(en blanco)':
+                    try:
+                        of_date = datetime.strptime(producto.primera_of, '%d/%m/%Y')
+                        if of_date.date() == fecha_actual.date():
+                            # Añadir producción programada
+                            of_cantidad = getattr(producto, 'of_reales', getattr(producto, 'of', 0))
+                            stock_previsto += of_cantidad
+                            logger.info(f"OF programada para {cod_art} el {fecha_str}: +{of_cantidad} cajas")
+                    except ValueError:
+                        logger.warning(f"Formato de fecha inválido en OF para {cod_art}: {producto.primera_of}")
+                
+                # Verificar si hay pedidos específicos para esta fecha
+                pedido_dia = 0
+                for col in fecha_cols:
+                    try:
+                        # Intentar interpretar la columna como fecha
+                        fecha_col = None
+                        
+                        # Intentar diferentes formatos de fecha
+                        for fmt in ['%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d']:
+                            try:
+                                fecha_col = datetime.strptime(col, fmt).date()
+                                break
+                            except ValueError:
+                                continue
+                        
+                        # Si no es una fecha, continuar
+                        if fecha_col is None:
+                            continue
+                            
+                        # Si la fecha coincide con el día actual
+                        if fecha_col == fecha_actual.date():
+                            if col in pedidos_producto.columns:
                                 valor = pedidos_producto[col].values[0]
                                 if pd.notna(valor) and valor != 0:
-                                    pedido_dia += abs(valor)  # Los pedidos son negativos en el archivo
-                        except Exception as e:
-                            logger.warning(f"Error al procesar pedido en columna {col}: {str(e)}")
-
-                    # Añadir pedidos específicos si existen
-                    if pedido_dia > 0:
-                        cantidad_a_fabricar += pedido_dia
-                        logger.info(f"Añadiendo pedido específico de {pedido_dia} cajas para producto {producto.cod_art}")
-
-                    # Añadir el producto a la lista de productos a planificar
-                    producto.cajas_a_producir = cantidad_a_fabricar
+                                    # Los pedidos suelen ser negativos, tomar valor absoluto
+                                    pedido_dia += abs(float(valor))
+                                    logger.info(f"Pedido específico para {cod_art} el {fecha_str}: {abs(float(valor))} cajas")
+                    except Exception as e:
+                        logger.warning(f"Error procesando pedido en columna {col} para {cod_art}: {str(e)}")
+                
+                # Restar pedidos específicos del stock
+                if pedido_dia > 0:
+                    stock_previsto -= pedido_dia
+                
+                # Verificar si hay riesgo de ruptura de stock
+                if stock_previsto < stock_seguridad:
+                    logger.warning(f"Riesgo de ruptura de stock para {cod_art} el día {fecha_str}")
+                    logger.warning(f"Stock previsto: {stock_previsto:.2f}, Stock seguridad: {stock_seguridad:.2f}")
+                    
+                    # Marcar que hay riesgo de ruptura y guardar la fecha
+                    hay_riesgo_ruptura = True
+                    fecha_ruptura = fecha_actual
+                    break  # Salir del bucle cuando se detecte el primer riesgo
+            
+            # Si hay riesgo de ruptura dentro del período, planificar producción adicional
+            if hay_riesgo_ruptura:
+                # Calcular cuánto producir
+                dias_hasta_ruptura = (fecha_ruptura - fecha_inicio).days
+                dias_restantes = dias_planificacion - dias_hasta_ruptura
+                
+                # Calcular demanda futura desde fecha de ruptura hasta fin de planificación
+                demanda_futura = producto.demanda_media * dias_restantes
+                
+                # Cantidad total a fabricar: cubrir déficit actual + demanda futura + seguridad
+                cantidad_a_fabricar = (stock_seguridad - stock_previsto) + demanda_futura
+                
+                # Añadir un margen de seguridad extra (10%)
+                cantidad_a_fabricar *= 1.1
+                
+                # Asegurar que sea al menos el mínimo lote viable (2 horas)
+                min_cajas = 2 * producto.cajas_hora_reales
+                if cantidad_a_fabricar < min_cajas:
+                    cantidad_a_fabricar = min_cajas
+                
+                logger.info(f"Se requieren {cantidad_a_fabricar:.2f} cajas adicionales para {cod_art}")
+                
+                # Si ya está planificado para producción, aumentar la cantidad
+                if hasattr(producto, 'cajas_a_producir') and producto.cajas_a_producir > 0:
+                    producto.cajas_a_producir += cantidad_a_fabricar
+                    # Recalcular horas basadas en cajas actualizadas
+                    producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                    # Ajustar cajas para que sean coherentes con las horas
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                else:
+                    # Asignar producción inicial
+                    producto.cajas_a_producir = round(cantidad_a_fabricar)
+                    producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
                     productos_a_planificar.append(producto)
-                    break  # Solo necesitamos detectar la primera vez que se sobrepasa el stock de seguridad
-
-        logger.info(f"Se han identificado {len(productos_a_planificar)} productos adicionales para planificar debido a pedidos.")
-        return productos_a_planificar
-
+        
+        # Eliminar duplicados en la lista final
+        codigos = set()
+        productos_finales = []
+        for p in productos_a_planificar:
+            if p.cod_art not in codigos:
+                codigos.add(p.cod_art)
+                productos_finales.append(p)
+        
+        logger.info(f"Productos adicionales para planificar por pedidos pendientes: {len(productos_finales)}")
+        return productos_finales
+        
     except Exception as e:
         logger.error(f"Error verificando pedidos: {str(e)}")
         import traceback
-        logger.error(f"Traceback completo: {traceback.format_exc()}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return []
     
 def calcular_ocupacion_almacen(productos, fecha_tag, productos_info=None):
