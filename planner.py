@@ -123,8 +123,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
 def calcular_cobertura_maxima(m_vta_15):
     """Calcula la cobertura máxima basada en m_vta_15."""
     if m_vta_15 is None:
-        logger.warning("m_vta_15 es None. Se asume cobertura máxima infinita.")
-        return float('inf')  # Sin límite de cobertura máxima
+        return 120.0  # Valor predeterminado seguro
     
     if m_vta_15 >= 150:
         return 14.00
@@ -137,9 +136,8 @@ def calcular_cobertura_maxima(m_vta_15):
     elif 10 <= m_vta_15 < 25:
         return 60.00
     else:
-        # logger.info("m_vta_15 < 10, cobertura máxima infinita")  # <-- Log adicional
-        return 120.00  # <-- Asegurar el return con 120 días para no rellenar excesivamente la producción y no entrar en conflicto con la restricción 2h min
-
+        return 120.00  # Para productos de baja rotación
+    
 def redondear_media_hora_al_alza(horas):   # Para adeptar a la realidad del proceso productivo redondemos las horas planificadas por el modelo a divisibles 0.5 horas
     """
     Redondea las horas al múltiplo de 0.5 más cercano, siempre hacia arriba.
@@ -156,7 +154,7 @@ def redondear_media_hora_al_alza(horas):   # Para adeptar a la realidad del proc
 def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, dias_cobertura_base):
     """
     Aplica el método Simplex para optimizar la producción.
-    Versión simplificada que maneja problemas infactibles relajando restricciones.
+    Versión mejorada que respeta límites de cobertura y maximiza utilización de horas.
     """
     try:
         # Consolidar productos con el mismo código para evitar duplicados
@@ -193,56 +191,109 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                p.cajas_hora_reales > 0
         ]
         
+        # Añadir la cobertura máxima como atributo para cada producto según su nivel de demanda
+        for producto in productos_validos:
+            if producto.m_vta_15 >= 150:
+                producto.cobertura_maxima = 14.0
+            elif 100 <= producto.m_vta_15 < 150:
+                producto.cobertura_maxima = 18.0
+            elif 50 <= producto.m_vta_15 < 100:
+                producto.cobertura_maxima = 20.0
+            elif 25 <= producto.m_vta_15 < 50:
+                producto.cobertura_maxima = 30.0
+            elif 10 <= producto.m_vta_15 < 25:
+                producto.cobertura_maxima = 60.0
+            else:  # < 10
+                producto.cobertura_maxima = 120.0
+                
+            producto.cobertura_actual = producto.stock_inicial / producto.demanda_media if producto.demanda_media > 0 else float('inf')
+            
+            # Log para cada producto
+            logger.info(f"Producto {producto.cod_art}: demanda={producto.demanda_media:.2f}, " +
+                       f"cobertura_actual={producto.cobertura_actual:.2f}, cobertura_max={producto.cobertura_maxima}")
+        
+        # Filtrar productos que ya tienen cobertura igual o superior a la máxima
+        productos_filtrados = []
+        for producto in productos_validos:
+            # Si la cobertura actual ya supera la máxima, no planificar
+            if producto.cobertura_actual >= producto.cobertura_maxima:
+                logger.info(f"Producto {producto.cod_art} ya tiene cobertura suficiente: {producto.cobertura_actual:.2f} días >= máximo {producto.cobertura_maxima} días")
+            else:
+                productos_filtrados.append(producto)
+        
+        productos_validos = productos_filtrados
+        logger.info(f"Productos después de filtrar por cobertura máxima: {len(productos_validos)}")
+        
         n_productos = len(productos_validos)
         if n_productos == 0:
             logger.error("No hay productos válidos para optimizar")
             return []
         
-        logger.info(f"Optimizando {n_productos} productos")
-        
         # Ordenar por cobertura (menor primero) para priorización
         productos_validos.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
         
-        # Primera fase: Intentar optimización con restricciones relajadas (solo horas)
+        # Mostrar los 10 productos con menor cobertura
+        logger.info("TOP 10 productos prioritarios:")
+        for i, p in enumerate(productos_validos[:10]):
+            logger.info(f"{i+1}. {p.cod_art}: cobertura={p.cobertura_inicial:.2f}, demanda={p.demanda_media:.2f}")
+        
+        # Primera fase: Intentar optimización 
         try:
             cobertura_minima = dias_cobertura_base + dias_planificacion
             
             # Función objetivo: priorizar productos con menor cobertura
             coeficientes = []
             for producto in productos_validos:
-                if producto.demanda_media > 0:
-                    prioridad = max(0, 1 / (producto.cobertura_inicial + 0.01))
+                # Dar mayor prioridad a productos con cobertura baja
+                if producto.cobertura_inicial < 3:
+                    prioridad = 20.0 / (producto.cobertura_inicial + 0.01)  # Mayor peso a productos críticos
+                elif producto.cobertura_inicial < 7:
+                    prioridad = 10.0 / (producto.cobertura_inicial + 0.01)  # Peso medio
                 else:
-                    prioridad = 0
-                coeficientes.append(-prioridad)
+                    prioridad = 1.0 / (producto.cobertura_inicial + 0.01)  # Peso normal
+                coeficientes.append(-prioridad)  # Negativo porque linprog minimiza
     
-            # Restricción de horas disponibles totales (única restricción obligatoria)
+            # Restricción de horas disponibles totales
             A_eq = np.zeros((1, n_productos))
             A_eq[0] = [1 / producto.cajas_hora_reales for producto in productos_validos]
-            b_eq = [horas_disponibles]
+            b_eq = [horas_disponibles * 0.99]  # 99% de las horas disponibles para evitar redondeos
             
             # Límites de producción (bounds)
             bounds = []
             
-            for producto in productos_validos:
-                # Calcular cobertura máxima menos restrictiva
-                cobertura_maxima = calcular_cobertura_maxima(producto.m_vta_15)
-                
+            for producto in productos_validos:                
                 # Mínimo: 2 horas de producción (mínimo viable)
                 min_cajas = 2 * producto.cajas_hora_reales
                 
-                # Máximo: lo que permita la capacidad disponible
-                max_cajas = horas_disponibles * producto.cajas_hora_reales
+                # Calcular cuánta cobertura adicional podemos añadir
+                cobertura_restante = max(0, producto.cobertura_maxima - producto.cobertura_actual)
                 
-                # Si había stock mínimo requerido, intentar respetarlo pero sin ser obligatorio
-                stock_min = max((producto.demanda_media * cobertura_minima) - producto.stock_inicial, 0)
-                if stock_min > 0:
-                    # Priorizar este producto aumentando su mínimo, pero sin hacer infactible
-                    min_cajas = min(min_cajas + stock_min * 0.5, max_cajas)
+                # Calcular cajas para llegar a la cobertura máxima exacta
+                max_por_cobertura = producto.demanda_media * cobertura_restante
+                
+                # MEJORA: Intentar acercarse a la cobertura máxima
+                # Para productos con baja cobertura, apuntar al menos al 80% de su cobertura máxima
+                if producto.cobertura_inicial < 5:
+                    cobertura_objetivo = max(producto.cobertura_maxima * 0.8, producto.cobertura_inicial + dias_planificacion)
+                    cajas_objetivo = (cobertura_objetivo * producto.demanda_media) - producto.stock_inicial
+                    min_cajas = max(min_cajas, cajas_objetivo)
+                
+                # Máximo: lo menor entre capacidad disponible y lo necesario para cobertura máxima
+                max_cajas = min(
+                    horas_disponibles * 0.5 * producto.cajas_hora_reales,  # Máximo 50% de capacidad para diversificar
+                    max_por_cobertura  # Restricción de cobertura máxima
+                )
+                
+                # Asegurar que max_cajas sea al menos min_cajas para factibilidad
+                max_cajas = max(max_cajas, min_cajas)
                 
                 bounds.append((min_cajas, max_cajas))
+                
+                # Log detallado para cada producto
+                logger.info(f"Producto {producto.cod_art}: cobertura_actual={producto.cobertura_actual:.2f}/{producto.cobertura_maxima}, " +
+                         f"restante={cobertura_restante:.2f}, bounds=({min_cajas:.2f}, {max_cajas:.2f})")
             
-            # Ejecutar optimización solo con restricción de horas y bounds
+            # Ejecutar optimización
             result = linprog(
                 c=coeficientes,
                 A_eq=A_eq,
@@ -252,75 +303,66 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
             )
             
             if result.success:
-                logger.info("Optimización con restricciones relajadas exitosa")
+                logger.info("Optimización exitosa")
             else:
-                # Si aún falla, usar distribución proporcional manual
                 raise ValueError(f"Optimización infactible: {result.message}")
                 
         except Exception as e:
             logger.warning(f"Optimización matemática falló: {str(e)}. Usando distribución proporcional.")
             
-            # Distribución proporcional basada en prioridad
-            horas_asignadas = 0
-            
-            # Asignar proporcionalmente, priorizando productos con menor cobertura
-            prioridades = []
-            for producto in productos_validos:
-                if producto.demanda_media > 0:
-                    if producto.cobertura_inicial < 3:  # Productos críticos
-                        prioridad = 10.0 / (producto.cobertura_inicial + 0.1)
-                    else:  # Productos normales
-                        prioridad = 1.0 / (producto.cobertura_inicial + 0.1)
-                else:
-                    prioridad = 0.1
-                prioridades.append(prioridad)
-            
-            # Normalizar prioridades
-            total_prioridad = sum(prioridades)
-            for i in range(len(prioridades)):
-                prioridades[i] /= total_prioridad
-            
-            # Asignar horas según prioridad
-            for i, producto in enumerate(productos_validos):
-                producto.horas_necesarias = horas_disponibles * prioridades[i]
-                
-                # Asegurar mínimo de 2 horas si posible
-                if producto.horas_necesarias < 2:
-                    producto.horas_necesarias = 0  # No asignar si es menos de 2 horas
-                
-                # Redondear a múltiplos de 0.5
-                producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
-                
-                # Calcular cajas_a_producir
-                producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
-                
-                # Sumar horas asignadas
-                horas_asignadas += producto.horas_necesarias
-            
-            # Si hay exceso de horas, ajustar
-            if horas_asignadas > horas_disponibles:
-                # Ordenar por prioridad (menor cobertura primero)
-                productos_ordenados = sorted(
-                    productos_validos,
-                    key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'),
-                    reverse=True  # Reducir primero los de mayor cobertura
-                )
-                
-                # Reducir horas hasta cumplir con el límite
-                exceso = horas_asignadas - horas_disponibles
-                for producto in productos_ordenados:
-                    if exceso <= 0:
-                        break
-                    
-                    if producto.horas_necesarias >= 2.5:  # Evitar reducir por debajo de 2 horas
-                        reduccion = min(0.5, exceso, producto.horas_necesarias - 2)
-                        if reduccion > 0:
-                            producto.horas_necesarias -= reduccion
-                            producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
-                            exceso -= reduccion
-            
-            # Usar valores calculados manualmente
+            # Distribución proporcional manual cuando falla la optimización
             result = None
+            
+            # Asignar horas basadas en prioridad de cobertura
+            total_prioridad = 0
+            prioridades = []
+            
+            for producto in productos_validos:
+                # Calcular prioridad basada en cobertura y demanda
+                if producto.cobertura_inicial < 3:
+                    prioridad = 10.0 / (producto.cobertura_inicial + 0.01) * producto.demanda_media
+                elif producto.cobertura_inicial < 7:
+                    prioridad = 5.0 / (producto.cobertura_inicial + 0.01) * producto.demanda_media
+                else:
+                    prioridad = 1.0 / (producto.cobertura_inicial + 0.01) * producto.demanda_media
+                
+                prioridades.append(prioridad)
+                total_prioridad += prioridad
+            
+            # Asignar horas proporcionalmente
+            for i, producto in enumerate(productos_validos):
+                # Porcentaje de horas basado en prioridad
+                porcentaje = prioridades[i] / total_prioridad
+                horas_asignadas = horas_disponibles * porcentaje
+                
+                # Redondear a múltiplos de 0.5 y asegurar mínimo
+                horas_asignadas = max(2, redondear_media_hora_al_alza(horas_asignadas))
+                
+                # Calcular cajas y verificar cobertura máxima
+                cajas = round(horas_asignadas * producto.cajas_hora_reales)
+                cobertura_resultante = (producto.stock_inicial + cajas) / producto.demanda_media
+                
+                if cobertura_resultante > producto.cobertura_maxima:
+                    # Limitar a cobertura máxima exacta
+                    cajas_maximas = (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial
+                    
+                    # Si es necesario menos de 2 horas, ajustar a 2 horas mínimo
+                    horas_minimas = 2.0
+                    cajas_minimas = horas_minimas * producto.cajas_hora_reales
+                    
+                    if cajas_maximas < cajas_minimas:
+                        # Si no se puede llegar a la cobertura máxima con 2 horas mínimo,
+                        # producimos solo 2 horas
+                        cajas = round(cajas_minimas)
+                    else:
+                        # Producir hasta la cobertura máxima exacta
+                        cajas = round(cajas_maximas)
+                        
+                    horas_asignadas = redondear_media_hora_al_alza(cajas / producto.cajas_hora_reales)
+                
+                # Asignar valores
+                producto.cajas_a_producir = cajas
+                producto.horas_necesarias = horas_asignadas
         
         # Procesar resultados, del optimizador o manual
         productos_con_produccion = []
@@ -329,24 +371,205 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         for i, producto in enumerate(productos_validos):
             # Si tenemos resultado del optimizador
             if result and result.success:
+                # Asignar cajas iniciales desde el resultado del optimizador
                 producto.cajas_a_producir = max(0, round(result.x[i]))
-                producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
-                producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
-                producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                
+                if producto.cajas_a_producir > 0:
+                    # Calcular horas necesarias y redondear a múltiplos de 0.5
+                    producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
+                    
+                    # Recalcular cajas basado en horas redondeadas
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                    
+                    # Calcular cobertura resultante
+                    cobertura_final = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                    
+                    # Verificar si excede la cobertura máxima permitida
+                    if cobertura_final > producto.cobertura_maxima:
+                        logger.warning(f"Ajustando producto {producto.cod_art}: cobertura {cobertura_final:.2f} > máxima {producto.cobertura_maxima}")
+                        
+                        # Calcular cajas necesarias para llegar exactamente a la cobertura máxima
+                        cajas_maximas = max(0, (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial)
+                        
+                        # Calcular cajas para 2 horas mínimo
+                        cajas_minimas = 2 * producto.cajas_hora_reales
+                        
+                        # Decidir entre respetar la cobertura máxima o el mínimo de 2 horas
+                        if cajas_maximas < cajas_minimas:
+                            # Si no podemos respetar la cobertura máxima con 2 horas mínimo,
+                            # priorizamos las 2 horas mínimo
+                            logger.info(f"Producto {producto.cod_art}: Se prioriza 2 horas mínimas aunque exceda cobertura máxima de {producto.cobertura_maxima}")
+                            producto.cajas_a_producir = round(cajas_minimas)
+                        else:
+                            # Podemos respetar tanto la cobertura máxima como las 2 horas mínimo
+                            producto.cajas_a_producir = round(cajas_maximas)
+                        
+                        # Calcular horas basadas en las cajas actualizadas
+                        producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                        
+                        # Reajustar cajas para que coincidan con las horas redondeadas
+                        producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                else:
+                    producto.horas_necesarias = 0
             
             # Si el producto tiene horas asignadas, incluirlo
             if hasattr(producto, 'horas_necesarias') and producto.horas_necesarias > 0:
                 # Calcular cobertura final
-                if producto.demanda_media > 0:
-                    producto.cobertura_final_plan = (
-                        producto.stock_inicial + producto.cajas_a_producir
-                    ) / producto.demanda_media
+                producto.cobertura_final_plan = (
+                    producto.stock_inicial + producto.cajas_a_producir
+                ) / producto.demanda_media
                 
                 total_horas_planificadas += producto.horas_necesarias
                 productos_con_produccion.append(producto)
         
-        logger.info(f"Planificación completada: {total_horas_planificadas:.2f} horas / {horas_disponibles:.2f} disponibles")
-        logger.info(f"Productos con producción asignada: {len(productos_con_produccion)}")
+        # VERIFICACIÓN: Asegurar que nunca excedamos las horas disponibles
+        if total_horas_planificadas > horas_disponibles:
+            logger.warning(f"Ajustando plan: {total_horas_planificadas:.2f} horas exceden las {horas_disponibles:.2f} disponibles")
+            
+            # Ordenar productos por cobertura (mayor primero)
+            productos_con_produccion.sort(key=lambda p: (-p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else -float('inf')))
+            
+            # Reducir horas hasta cumplir con el límite
+            exceso = total_horas_planificadas - horas_disponibles
+            i = 0
+            
+            # Primera pasada: reducir productos con cobertura alta
+            while exceso > 0 and i < len(productos_con_produccion):
+                producto = productos_con_produccion[i]
+                
+                # Solo reducir productos con cobertura alta
+                if producto.cobertura_inicial > 7:
+                    reduccion_posible = producto.horas_necesarias - 2.0  # Mantener mínimo 2 horas
+                    
+                    if reduccion_posible > 0:
+                        reduccion = min(0.5, exceso, reduccion_posible)
+                        if reduccion > 0:
+                            producto.horas_necesarias -= reduccion
+                            producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                            
+                            # Recalcular cobertura final
+                            producto.cobertura_final_plan = (
+                                producto.stock_inicial + producto.cajas_a_producir
+                            ) / producto.demanda_media
+                            
+                            exceso -= reduccion
+                i += 1
+            
+            # Si aún hay exceso, eliminar productos completos con mayor cobertura
+            if exceso > 0:
+                logger.warning(f"Eliminando productos para cumplir restricción de horas: {exceso:.2f} horas de exceso")
+                
+                # Recorrer la lista desde el principio (productos con mayor cobertura)
+                while len(productos_con_produccion) > 0 and exceso > 0:
+                    # Solo eliminar productos con cobertura alta
+                    if productos_con_produccion[0].cobertura_inicial > 5:
+                        exceso -= productos_con_produccion[0].horas_necesarias
+                        productos_con_produccion.pop(0)
+                    else:
+                        # Ya llegamos a productos con cobertura menor a 5, romper
+                        break
+            
+            # Recalcular el total final
+            total_horas_planificadas = sum(p.horas_necesarias for p in productos_con_produccion)
+        
+        # MEJORA: Verificar si hay horas sin utilizar y distribuirlas
+        if total_horas_planificadas < horas_disponibles * 0.95:  # Si usamos menos del 95% de las horas
+            horas_disponibles_restantes = horas_disponibles - total_horas_planificadas
+            logger.info(f"Distribuyendo {horas_disponibles_restantes:.2f} horas adicionales")
+            
+            # Ordenar productos por cobertura (menor primero)
+            productos_con_produccion.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+            
+            # Distribuir horas adicionales
+            for producto in productos_con_produccion:
+                # Solo aumentar si podemos añadir al menos 0.5 horas
+                if horas_disponibles_restantes < 0.5:
+                    break
+                    
+                # Calcular cuántas horas podemos añadir sin exceder la cobertura máxima
+                cobertura_actual = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                cobertura_restante = max(0, producto.cobertura_maxima - cobertura_actual)
+                
+                if cobertura_restante > 0:
+                    # Cajas adicionales posibles
+                    cajas_adicionales = producto.demanda_media * cobertura_restante
+                    horas_adicionales = cajas_adicionales / producto.cajas_hora_reales
+                    
+                    # Limitar a horas disponibles y redondear
+                    horas_a_agregar = min(8, horas_adicionales, horas_disponibles_restantes)
+                    horas_a_agregar = redondear_media_hora_al_alza(horas_a_agregar)
+                    
+                    if horas_a_agregar >= 0.5:  # Si vale la pena agregar
+                        producto.horas_necesarias += horas_a_agregar
+                        producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                        producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                        
+                        horas_disponibles_restantes -= horas_a_agregar
+                        total_horas_planificadas += horas_a_agregar
+                        
+                        logger.info(f"Añadidas {horas_a_agregar:.1f} horas a {producto.cod_art}")
+            
+            # Si aún quedan horas, intentar agregar más productos
+            if horas_disponibles_restantes >= 2.0:  # Si quedan al menos 2 horas
+                # Filtrar productos que no están en producción pero podrían estarlo
+                productos_adicionales = [p for p in productos_validos if p not in productos_con_produccion and 
+                                       p.cobertura_actual < p.cobertura_maxima]
+                
+                # Ordenar por cobertura
+                productos_adicionales.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+                
+                for producto in productos_adicionales:
+                    if horas_disponibles_restantes < 2.0:
+                        break
+                        
+                    # Asignar 2 horas mínimo
+                    producto.horas_necesarias = 2.0
+                    producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                    producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                    
+                    # Verificar que no exceda significativamente la cobertura máxima
+                    if producto.cobertura_final_plan > producto.cobertura_maxima:
+                        cajas_maximas = (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial
+                        
+                        # Solo si es posible producir más del mínimo respetando la cobertura máxima
+                        if cajas_maximas >= producto.cajas_hora_reales * 2:
+                            producto.cajas_a_producir = round(cajas_maximas)
+                            producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                            producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                            producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                    
+                    horas_disponibles_restantes -= producto.horas_necesarias
+                    total_horas_planificadas += producto.horas_necesarias
+                    productos_con_produccion.append(producto)
+                    
+                    logger.info(f"Añadido nuevo producto {producto.cod_art} con {producto.horas_necesarias:.1f} horas")
+        
+        # Verificación final de coberturas máximas
+        for producto in productos_con_produccion:
+            cobertura_final = producto.cobertura_final_plan
+            # Calcular cajas necesarias para 2 horas mínimo
+            cajas_minimas = 2 * producto.cajas_hora_reales
+            cobertura_minima_viable = (producto.stock_inicial + cajas_minimas) / producto.demanda_media
+            
+            # Si supera la cobertura máxima y no es por la restricción de 2 horas mínimas, ajustar
+            if cobertura_final > producto.cobertura_maxima and cobertura_minima_viable <= producto.cobertura_maxima:
+                logger.warning(f"Ajuste final: Producto {producto.cod_art} excede cobertura máxima ({cobertura_final:.2f} > {producto.cobertura_maxima})")
+                
+                # Calcular cajas para cobertura exacta
+                cajas_exactas = (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial
+                producto.cajas_a_producir = round(cajas_exactas)
+                producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
+                producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
+                
+                logger.info(f"Producto {producto.cod_art} ajustado a {producto.cobertura_final_plan:.2f} días de cobertura")
+        
+        # Ordenar productos por cobertura (menor primero) para el resultado final
+        productos_con_produccion.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+        
+        logger.info(f"Plan final: {total_horas_planificadas:.2f} horas / {horas_disponibles:.2f} disponibles ({total_horas_planificadas/horas_disponibles*100:.1f}%)")
+        logger.info(f"Productos con producción: {len(productos_con_produccion)}")
         
         return productos_con_produccion
     
