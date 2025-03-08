@@ -19,11 +19,10 @@ class PlannerGUI:
         # Variables
         self.dataset_path = tk.StringVar()
         self.dataset_date = tk.StringVar()
-        self.dias_planificacion = tk.StringVar()
-        self.dias_no_habiles = tk.StringVar()
-        self.horas_mantenimiento = tk.StringVar()
+        self.dias_planificacion = tk.StringVar(value="7")  # Valor por defecto
+        self.dias_no_habiles = tk.StringVar(value="2")  # Valor por defecto
+        self.horas_mantenimiento = tk.StringVar(value="8")  # Valor por defecto
         self.dias_cobertura = tk.StringVar(value="3")  # Valor por defecto
-        self.replanificar_semana = tk.BooleanVar(value=False)  # Variable para la nueva pregunta
         
         self.create_widgets()
         
@@ -48,45 +47,33 @@ class PlannerGUI:
                                     date_pattern='dd/mm/yyyy')
         self.fecha_inicio.grid(row=2, column=1, sticky=tk.W)
         
-        # Días planificación (combobox)
+        # Días planificación
         ttk.Label(main_frame, text="Días Planificación:").grid(row=3, column=0, sticky=tk.W, pady=5)
         self.combo_dias_planif = ttk.Combobox(main_frame, textvariable=self.dias_planificacion, 
                                            values=["1", "2", "3", "4", "5", "6", "7"], 
                                            width=10, state="readonly")
         self.combo_dias_planif.current(6)  # Seleccionar 7 por defecto
         self.combo_dias_planif.grid(row=3, column=1, sticky=tk.W)
-        ttk.Label(main_frame, text="Entre 1 y 7", foreground="red").grid(row=3, column=2, sticky=tk.W)
         
-        # Días no hábiles (combobox)
+        # Días no hábiles
         ttk.Label(main_frame, text="Días No Hábiles:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.combo_dias_no_habiles = ttk.Combobox(main_frame, textvariable=self.dias_no_habiles, 
-                                               values=["1", "2", "3", "4"], 
-                                               width=10, state="readonly")
-        self.combo_dias_no_habiles.current(0)  # Seleccionar 1 por defecto
-        self.combo_dias_no_habiles.grid(row=4, column=1, sticky=tk.W)
-        ttk.Label(main_frame, text="Entre 1 y 4", foreground="red").grid(row=4, column=2, sticky=tk.W)
+        ttk.Entry(main_frame, textvariable=self.dias_no_habiles, width=10).grid(row=4, column=1, sticky=tk.W)
         
-        # Horas mantenimiento (combobox)
+        # Horas mantenimiento
         ttk.Label(main_frame, text="Horas Mantenimiento/Pruebas:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.combo_horas_mant = ttk.Combobox(main_frame, textvariable=self.horas_mantenimiento, 
                                           values=["4", "5", "6", "7", "8", "9", "10", "11", "12"], 
                                           width=10, state="readonly")
         self.combo_horas_mant.current(4)  # Seleccionar 8 por defecto
         self.combo_horas_mant.grid(row=5, column=1, sticky=tk.W)
-        ttk.Label(main_frame, text="Entre 4 y 12", foreground="red").grid(row=5, column=2, sticky=tk.W)
         
-        # Días cobertura (combobox)
+        # Días cobertura
         ttk.Label(main_frame, text="Días Cobertura:").grid(row=6, column=0, sticky=tk.W, pady=5)
         self.combo_dias_cobertura = ttk.Combobox(main_frame, textvariable=self.dias_cobertura, 
                                               values=["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], 
                                               width=10, state="readonly")
         self.combo_dias_cobertura.current(0)  # Seleccionar 3 por defecto
         self.combo_dias_cobertura.grid(row=6, column=1, sticky=tk.W)
-        ttk.Label(main_frame, text="Entre 3 y 12", foreground="red").grid(row=6, column=2, sticky=tk.W)
-        
-        # Replanificar semana en curso o próxima (checkbox)
-        ttk.Label(main_frame, text="¿Planificar semana en curso?").grid(row=7, column=0, sticky=tk.W, pady=10)
-        ttk.Checkbutton(main_frame, variable=self.replanificar_semana).grid(row=7, column=1, sticky=tk.W)
         
         # Botón generar
         ttk.Button(main_frame, text="Generar Plan", command=self.generate_plan).grid(row=8, column=1, pady=20)
@@ -116,11 +103,8 @@ class PlannerGUI:
                 self.dataset_date.set(date_obj.strftime('%d/%m/%Y'))
                 
                 # Establecer fecha inicio un día después
-                self.fecha_inicio.set_date(date_obj + timedelta(days=1))
-                
-                # Si es semana en curso, actualizar el checkbox
-                today = datetime.now().date()
-                self.replanificar_semana.set(date_obj.date() <= today)
+                next_day = date_obj + timedelta(days=1)
+                self.fecha_inicio.set_date(next_day)
             else:
                 self.dataset_date.set("Formato de archivo no reconocido")
         except Exception as e:
@@ -139,13 +123,19 @@ class PlannerGUI:
             if dias_planificacion < 1 or dias_planificacion > 7:
                 raise ValueError("Los días de planificación deben estar entre 1 y 7")
                 
-            dias_no_habiles = float(self.dias_no_habiles.get())
-            if dias_no_habiles < 1 or dias_no_habiles > 4:
-                raise ValueError("Los días no hábiles deben estar entre 1 y 4")
-                
-            # Verificar que días no hábiles sean menores que días planificación
-            if dias_no_habiles >= dias_planificacion:
-                raise ValueError("Los días no hábiles deben ser menos que los días de planificación")
+            try:
+                dias_no_habiles = float(self.dias_no_habiles.get())
+                if dias_no_habiles < 1 or dias_no_habiles > 4:
+                    raise ValueError("Los días no hábiles deben estar entre 1 y 4")
+                    
+                # Verificar que días no hábiles sean menores que días planificación
+                if dias_no_habiles >= dias_planificacion:
+                    raise ValueError("Los días no hábiles deben ser menos que los días de planificación")
+            except ValueError as e:
+                if "could not convert string to float" in str(e):
+                    raise ValueError("Formato incorrecto para días no hábiles. Ingrese un número entre 1 y 4.")
+                else:
+                    raise e
                 
             horas_mantenimiento = int(self.horas_mantenimiento.get())
             if horas_mantenimiento < 4 or horas_mantenimiento > 12:
@@ -172,6 +162,33 @@ class PlannerGUI:
             messagebox.showerror("Error", "Por favor verifique todos los campos")
             return False
             
+    def mostrar_alerta_stock_negativo(self, productos_stock_negativo, fecha_dataset_dt):
+        """Muestra una alerta visual con productos de stock negativo y pide confirmación"""
+        if not productos_stock_negativo:
+            return True
+            
+        # Crear un mensaje detallado para el diálogo
+        mensaje = "⚠️ ALERTA: STOCK INICIAL NEGATIVO ⚠️\n\n"
+        mensaje += "Se detectaron productos con stock inicial negativo.\n"
+        mensaje += "Esto indica que podría haberse producido una rotura de stock antes del inicio de la planificación.\n\n"
+        
+        # Añadir información de los productos (limitado a los primeros 5 para no saturar)
+        mensaje += "Productos afectados (hasta 5 mostrados):\n\n"
+        mensaje += f"{'CÓDIGO':<10} {'NOMBRE':<30} {'STOCK INICIAL':<15} {'DÍAS ANTES':<12} {'ROTURA EN':<12}\n"
+        
+        for i, p in enumerate(productos_stock_negativo[:5]):
+            mensaje += f"{p['cod_art']:<10} {p['nom_art'][:28]:<30} {p['stock_inicial']:<15} {p['dias_cobertura']:<12} {p['dia_rotura']:<12}\n"
+            
+        if len(productos_stock_negativo) > 5:
+            mensaje += f"\n... y {len(productos_stock_negativo) - 5} productos más."
+            
+        mensaje += "\n\n🔹 Se recomienda adelantar la planificación a una fecha anterior a la primera rotura."
+        mensaje += "\n\n¿Desea continuar de todos modos?"
+        
+        # Mostrar diálogo de confirmación
+        respuesta = messagebox.askyesno("Alerta de Stock Negativo", mensaje)
+        return respuesta
+
     def generate_plan(self):
         if not self.validate_inputs():
             return
@@ -193,26 +210,33 @@ class PlannerGUI:
             if not productos:
                 raise ValueError("Error al leer el dataset")
 
-            productos_validos, horas_disponibles = calcular_formulas(
+            # Modificar calcular_formulas para que devuelva también los productos con stock negativo
+            productos_validos, horas_disponibles, productos_stock_negativo = calcular_formulas(
                 productos=productos,
                 fecha_inicio=fecha_inicio.strftime('%d-%m-%Y'),
                 fecha_dataset=fecha_dataset.strftime('%d-%m-%Y'),
                 dias_planificacion=dias_planificacion,
                 dias_no_habiles=dias_no_habiles,
-                horas_mantenimiento=horas_mantenimiento
+                horas_mantenimiento=horas_mantenimiento,
+                gui_mode=True  # Indicar que estamos en modo GUI para no mostrar en consola
             )
+
+            # Verificar si hay productos con stock negativo y mostrar alerta
+            if productos_stock_negativo and not self.mostrar_alerta_stock_negativo(productos_stock_negativo, fecha_dataset):
+                logger.info("Proceso interrumpido por el usuario debido a stock negativo")
+                return
 
             if not productos_validos:
                 raise ValueError("Error en los cálculos")
 
-            # 2. Verificar pedidos pendientes - USANDO LA NUEVA FUNCIÓN QUE INCLUYE FECHA_INICIO
+            # 2. Verificar pedidos pendientes
             df_pedidos = leer_pedidos_pendientes(fecha_dataset)
             if df_pedidos is not None:
                 productos_a_planificar_adicionales = verificar_pedidos(
                     productos=productos,
                     df_pedidos=df_pedidos,
                     fecha_dataset=fecha_dataset,
-                    fecha_inicio=fecha_inicio,  # IMPORTANTE: Pasamos la fecha de inicio
+                    fecha_inicio=fecha_inicio,
                     dias_planificacion=dias_planificacion
                 )
 
@@ -242,7 +266,12 @@ class PlannerGUI:
                 dias_cobertura_base=dias_cobertura
             )
             
-            messagebox.showinfo("Éxito", "Plan generado y exportado correctamente")
+            # Mostrar mensaje de éxito con información de ocupación
+            mensaje_exito = "Plan generado y exportado correctamente."
+            if resultado_ocupacion:
+                mensaje_exito += f"\n\nOcupación de almacén al final de la planificación: {resultado_ocupacion['ocupacion_fin']['total_ubicaciones']} ubicaciones."
+            
+            messagebox.showinfo("Éxito", mensaje_exito)
             
         except Exception as e:
             logger.error(f"Error generando plan: {str(e)}")
