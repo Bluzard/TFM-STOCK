@@ -22,6 +22,7 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         
         productos_info, productos_omitir = leer_indicaciones_articulos()        
         productos_validos = []
+        productos_stock_negativo = []  # Lista para recolectar productos con stock negativo
 
         # Convertir fechas usando el formato correcto
         try:
@@ -64,23 +65,20 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
             ## ----------------- ALERTA STOCK INICIAL NEGATIVO ----------------- ##    
             # Verificar si el stock inicial es negativo
             if producto.stock_inicial < 0:
-                print("\n⚠️  ALERTA: STOCK INICIAL NEGATIVO ⚠️")
-                print("El stock inicial del producto es menor a 0.")
-                print("🔹 Se recomienda adelantar la planificación para evitar problemas.\n")
+                # Almacenar producto con stock negativo para mostrar información detallada
+                dia_rotura = fecha_dataset_dt + timedelta(days=int(producto.stock_inicial / producto.demanda_media * -1))
+                productos_stock_negativo.append({
+                    'cod_art': producto.cod_art,
+                    'nom_art': producto.nom_art,
+                    'stock_inicial': round(producto.stock_inicial, 2),
+                    'demanda_media': round(producto.demanda_media, 2),
+                    'dias_cobertura': round(producto.stock_inicial / producto.demanda_media * -1, 1),
+                    'dia_rotura': dia_rotura.strftime('%d/%m/%Y')
+                })
                 
-                # Preguntar al usuario si desea continuar
-                respuesta = input("¿Desea continuar de todos modos? (s/n): ").strip().lower()
-
-                if respuesta != 's':
-                    print("⛔ Proceso interrumpido por el usuario.")
-                    exit()  # Detiene la ejecución del programa
-
-                # El código continúa normalmente si el usuario elige 's'
-                print("✅ Continuando con la ejecución...")
-
-            if producto.stock_inicial < 0:
+                # Ajustar stock inicial a 0 para la planificación
                 producto.stock_inicial = 0
-                logger.warning(f"Producto {producto.cod_art}: Stock Inicial negativo. Se ajustó a 0.")
+                logger.warning(f"Producto {producto.cod_art}: Stock Inicial negativo ({round(producto.stock_inicial, 2)}). Se ajustó a 0.")
 
             # 6. Cobertura Inicial  
             if producto.demanda_media > 0:
@@ -113,11 +111,38 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
                     producto.orden_planificacion = productos_info[producto.cod_art]['orden_planificacion']
                 productos_validos.append(producto)
 
+        # Mostrar información de stock negativo si hay productos afectados
+        if productos_stock_negativo:
+            print("\n⚠️  ALERTA: STOCK INICIAL NEGATIVO ⚠️")
+            print("Se detectaron productos con stock inicial negativo.")
+            print("Esto indica que podría haberse producido una rotura de stock antes del inicio de la planificación.\n")
+            
+            # Mostrar tabla con información de los productos
+            print(f"{'CÓDIGO':<10} {'NOMBRE':<30} {'STOCK INICIAL':<15} {'DEMANDA MEDIA':<15} {'DÍAS ANTES':<10} {'ROTURA EN':<12}")
+            print("-" * 95)
+            
+            for p in productos_stock_negativo:
+                print(f"{p['cod_art']:<10} {p['nom_art'][:28]:<30} {p['stock_inicial']:<15} {p['demanda_media']:<15} {p['dias_cobertura']:<10} {p['dia_rotura']:<12}")
+            
+            print("\n🔹 Se recomienda adelantar la planificación a una fecha anterior a la primera rotura.\n")
+            
+            # Preguntar al usuario si desea continuar
+            respuesta = input("¿Desea continuar de todos modos? (s/n): ").strip().lower()
+
+            if respuesta != 's':
+                print("⛔ Proceso interrumpido por el usuario.")
+                exit()  # Detiene la ejecución del programa
+
+            # El código continúa normalmente si el usuario elige 's'
+            print("✅ Continuando con la ejecución. Los productos con stock negativo se han ajustado a stock 0.")
+
         logger.info(f"Productos válidos tras filtros: {len(productos_validos)} de {len(productos)}")
         return productos_validos, horas_disponibles
         
     except Exception as e:
         logger.error(f"Error en cálculos: {str(e)}")
+        import traceback
+        logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None, None
 
 def calcular_cobertura_maxima(m_vta_15):
@@ -867,10 +892,10 @@ def calcular_ocupacion_almacen(productos, fecha_tag, productos_info=None):
         if not hasattr(producto, 'cod_art') or producto.cod_art not in productos_info:
             continue
             
-        # Obtener cajas por palet (valor por defecto: 40)
-        cajas_palet = productos_info[producto.cod_art].get('cajas_palet', 40)
+        # Obtener cajas por palet (valor por defecto: 28)
+        cajas_palet = productos_info[producto.cod_art].get('cajas_palet', 28)
         if cajas_palet <= 0:
-            cajas_palet = 40  # Evitar división por cero
+            cajas_palet = 28  # Evitar división por cero
             
         # Determinar qué stock usar según la etiqueta
         stock = 0
@@ -1014,7 +1039,6 @@ def exportar_resultados(productos_optimizados, productos, fecha_dataset, fecha_p
                     'Cobertura_Final_Est': round(producto_final.cobertura_final_est, 2) if producto_final.cobertura_final_est != 'NO VALIDO' else 0,
                     'Total_Palets': round(palets, 2),
                     'Total_Stock': round(stock_total, 2),
-                    'Penalizacion_Espacio': calcular_penalizacion_espacio(total_palets)
                 })
         
         # NUEVO: Añadir logging detallado de horas
