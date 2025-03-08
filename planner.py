@@ -186,23 +186,6 @@ def calcular_formulas(productos, fecha_inicio, fecha_dataset, dias_planificacion
         logger.error(f"Traceback completo: {traceback.format_exc()}")
         return None, None, []
 
-def calcular_cobertura_maxima(m_vta_15):
-    """Calcula la cobertura máxima basada en m_vta_15."""
-    if m_vta_15 is None:
-        return 120.0  # Valor predeterminado seguro
-    
-    if m_vta_15 >= 150:
-        return 14.00
-    elif 100 <= m_vta_15 < 150:
-        return 18.00
-    elif 50 <= m_vta_15 < 100:
-        return 20.00
-    elif 25 <= m_vta_15 < 50:
-        return 30.00
-    elif 10 <= m_vta_15 < 25:
-        return 60.00
-    else:
-        return 120.00  # Para productos de baja rotación
     
 def redondear_media_hora_al_alza(horas):   # Para adeptar a la realidad del proceso productivo redondemos las horas planificadas por el modelo a divisibles 0.5 horas
     """
