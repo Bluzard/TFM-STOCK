@@ -237,8 +237,14 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
             if hasattr(p, 'demanda_media') and 
                hasattr(p, 'cajas_hora_reales') and 
                p.demanda_media > 0 and 
-               p.cajas_hora_reales > 0
+               p.cajas_hora_reales > 0  # Verificar que cajas_hora_reales sea positivo
         ]
+        
+        # Verificación adicional para evitar divisiones por cero
+        for idx, producto in enumerate(productos_validos):
+            if producto.cajas_hora_reales <= 0:
+                logger.warning(f"Producto {producto.cod_art} tiene cajas_hora_reales <= 0. Ajustando a valor predeterminado.")
+                productos_validos[idx].cajas_hora_reales = 10.0  # Asignar valor predeterminado
         
         # Añadir la cobertura máxima como atributo para cada producto según su nivel de demanda
         for producto in productos_validos:
@@ -425,7 +431,13 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 
                 if producto.cajas_a_producir > 0:
                     # Calcular horas necesarias y redondear a múltiplos de 0.5
-                    producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    if producto.cajas_hora_reales > 0:  # Verificación de división por cero
+                        producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    else:
+                        logger.warning(f"Producto {producto.cod_art}: cajas_hora_reales es cero. Asignando valor predeterminado.")
+                        producto.cajas_hora_reales = 10.0  # Valor predeterminado
+                        producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
+                    
                     producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
                     
                     # Recalcular cajas basado en horas redondeadas
@@ -455,7 +467,12 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                             producto.cajas_a_producir = round(cajas_maximas)
                         
                         # Calcular horas basadas en las cajas actualizadas
-                        producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                        if producto.cajas_hora_reales > 0:  # Verificación de división por cero
+                            producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                        else:
+                            logger.warning(f"Producto {producto.cod_art}: cajas_hora_reales es cero. Asignando valor predeterminado.")
+                            producto.cajas_hora_reales = 10.0  # Valor predeterminado
+                            producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
                         
                         # Reajustar cajas para que coincidan con las horas redondeadas
                         producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
@@ -543,7 +560,14 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 if cobertura_restante > 0:
                     # Cajas adicionales posibles
                     cajas_adicionales = producto.demanda_media * cobertura_restante
-                    horas_adicionales = cajas_adicionales / producto.cajas_hora_reales
+                    
+                    # Verificar división por cero
+                    if producto.cajas_hora_reales > 0:
+                        horas_adicionales = cajas_adicionales / producto.cajas_hora_reales
+                    else:
+                        logger.warning(f"Producto {producto.cod_art}: cajas_hora_reales es cero. Asignando valor predeterminado.")
+                        producto.cajas_hora_reales = 10.0  # Valor predeterminado
+                        horas_adicionales = cajas_adicionales / producto.cajas_hora_reales
                     
                     # Limitar a horas disponibles y redondear
                     horas_a_agregar = min(8, horas_adicionales, horas_disponibles_restantes)
@@ -584,7 +608,15 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                         # Solo si es posible producir más del mínimo respetando la cobertura máxima
                         if cajas_maximas >= producto.cajas_hora_reales * 2:
                             producto.cajas_a_producir = round(cajas_maximas)
-                            producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                            
+                            # Verificar división por cero
+                            if producto.cajas_hora_reales > 0:
+                                producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                            else:
+                                logger.warning(f"Producto {producto.cod_art}: cajas_hora_reales es cero. Asignando valor predeterminado.")
+                                producto.cajas_hora_reales = 10.0  # Valor predeterminado
+                                producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                            
                             producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
                             producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
                     
@@ -608,7 +640,15 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 # Calcular cajas para cobertura exacta
                 cajas_exactas = (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial
                 producto.cajas_a_producir = round(cajas_exactas)
-                producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                
+                # Verificar división por cero
+                if producto.cajas_hora_reales > 0:
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                else:
+                    logger.warning(f"Producto {producto.cod_art}: cajas_hora_reales es cero. Asignando valor predeterminado.")
+                    producto.cajas_hora_reales = 10.0  # Valor predeterminado
+                    producto.horas_necesarias = redondear_media_hora_al_alza(producto.cajas_a_producir / producto.cajas_hora_reales)
+                
                 producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
                 producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
                 
@@ -852,16 +892,22 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, fecha_inicio, dias_p
                 cantidad_a_fabricar *= 1.1
                 
                 # Asegurar que sea al menos el mínimo lote viable (2 horas)
-                min_cajas = 2 * producto.cajas_hora_reales
-                if cantidad_a_fabricar < min_cajas:
-                    cantidad_a_fabricar = min_cajas
+                if hasattr(producto, 'cajas_hora_reales') and producto.cajas_hora_reales > 0:
+                    min_cajas = 2 * producto.cajas_hora_reales
+                    if cantidad_a_fabricar < min_cajas:
+                        cantidad_a_fabricar = min_cajas
                 
                 logger.info(f"Se requieren {cantidad_a_fabricar:.2f} cajas adicionales para {cod_art}")
+                
+                # Verificar si cajas_hora_reales está disponible y es mayor que cero
+                if not hasattr(producto, 'cajas_hora_reales') or producto.cajas_hora_reales <= 0:
+                    logger.warning(f"Producto {cod_art}: cajas_hora_reales es cero o no está definido. Asignando valor predeterminado.")
+                    producto.cajas_hora_reales = 10.0  # Valor predeterminado
                 
                 # Si ya está planificado para producción, aumentar la cantidad
                 if hasattr(producto, 'cajas_a_producir') and producto.cajas_a_producir > 0:
                     producto.cajas_a_producir += cantidad_a_fabricar
-                    # Recalcular horas basadas en cajas actualizadas
+                    # Recalcular horas basadas en cajas actualizadas (con comprobación de división por cero)
                     producto.horas_necesarias = producto.cajas_a_producir / producto.cajas_hora_reales
                     producto.horas_necesarias = redondear_media_hora_al_alza(producto.horas_necesarias)
                     # Ajustar cajas para que sean coherentes con las horas

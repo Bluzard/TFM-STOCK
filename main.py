@@ -162,11 +162,23 @@ class PlannerGUI:
             messagebox.showerror("Error", "Por favor verifique todos los campos")
             return False
             
-    def mostrar_alerta_stock_negativo(self, productos_stock_negativo, fecha_dataset_dt):
-        """Muestra una alerta visual con productos de stock negativo y pide confirmación"""
+    def mostrar_alerta_stock_negativo(self, productos_stock_negativo, fecha_dataset_dt, fecha_sugerida=None):
+        """
+        Muestra una alerta visual con productos de stock negativo y pide confirmación
+        
+        Args:
+            productos_stock_negativo: Lista de productos con stock negativo
+            fecha_dataset_dt: Fecha del dataset
+            fecha_sugerida: Fecha sugerida para planificación (opcional)
+            
+        Returns:
+            bool: True si el usuario decide continuar con la fecha actual
+                False si el usuario decide cancelar
+                "fecha_actualizada" (string) si el usuario selecciona actualizar la fecha
+        """
         if not productos_stock_negativo:
             return True
-            
+                
         # Crear un mensaje detallado para el diálogo
         mensaje = "⚠️ ALERTA: STOCK INICIAL NEGATIVO ⚠️\n\n"
         mensaje += "Se detectaron productos con stock inicial negativo.\n"
@@ -178,16 +190,74 @@ class PlannerGUI:
         
         for i, p in enumerate(productos_stock_negativo[:5]):
             mensaje += f"{p['cod_art']:<10} {p['nom_art'][:28]:<30} {p['stock_inicial']:<15} {p['dias_cobertura']:<12} {p['dia_rotura']:<12}\n"
-            
+                
         if len(productos_stock_negativo) > 5:
             mensaje += f"\n... y {len(productos_stock_negativo) - 5} productos más."
-            
-        mensaje += "\n\n🔹 Se recomienda adelantar la planificación a una fecha anterior a la primera rotura."
-        mensaje += "\n\n¿Desea continuar de todos modos?"
         
-        # Mostrar diálogo de confirmación
-        respuesta = messagebox.askyesno("Alerta de Stock Negativo", mensaje)
-        return respuesta
+        if fecha_sugerida:
+            mensaje += f"\n\n🔹 Se recomienda planificar desde la fecha: {fecha_sugerida.strftime('%d/%m/%Y')}"
+            mensaje += "\n\n¿Qué desea hacer?\n"
+            mensaje += "- Actualizar fecha: Actualiza la fecha de inicio a la recomendada y cancela el proceso actual\n"
+            mensaje += "- Continuar: Sigue con el proceso usando la fecha actual\n"
+            mensaje += "- Cancelar: Detiene el proceso sin cambios"
+            
+            # Crear un diálogo personalizado con tres botones
+            dialog = tk.Toplevel(self.root)
+            dialog.title("Alerta de Stock Negativo")
+            dialog.geometry("600x400")
+            dialog.transient(self.root)
+            dialog.grab_set()
+            
+            # Hacer que el diálogo sea modal
+            dialog.focus_set()
+            
+            # Variable para almacenar el resultado
+            result = tk.StringVar()
+            
+            # Crear un widget de texto para mostrar el mensaje
+            text_widget = tk.Text(dialog, wrap=tk.WORD, width=70, height=15)
+            text_widget.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+            text_widget.insert(tk.END, mensaje)
+            text_widget.config(state=tk.DISABLED)
+            
+            # Frame para botones
+            button_frame = tk.Frame(dialog)
+            button_frame.pack(pady=10)
+            
+            # Función para establecer resultado y cerrar diálogo
+            def set_result(value):
+                result.set(value)
+                dialog.destroy()
+            
+            # Botones
+            tk.Button(button_frame, text="Actualizar fecha", width=25, 
+                    command=lambda: set_result("actualizar")).pack(side=tk.LEFT, padx=5)
+            tk.Button(button_frame, text="Continuar con fecha actual", width=25,
+                    command=lambda: set_result("continuar")).pack(side=tk.LEFT, padx=5)
+            tk.Button(button_frame, text="Cancelar", width=15,
+                    command=lambda: set_result("cancelar")).pack(side=tk.LEFT, padx=5)
+            
+            # Esperar hasta que el diálogo se cierre
+            self.root.wait_window(dialog)
+            
+            # Procesar resultado
+            if result.get() == "actualizar":
+                # Actualizar la fecha en el calendario
+                self.fecha_inicio.set_date(fecha_sugerida)
+                # Devolver una señal especial indicando que se actualizó la fecha
+                return "fecha_actualizada"
+            elif result.get() == "continuar":
+                return True
+            else:  # cancelar
+                return False
+        else:
+            # Comportamiento original cuando no hay fecha sugerida
+            mensaje += "\n\n🔹 Se recomienda adelantar la planificación a una fecha anterior a la primera rotura."
+            mensaje += "\n\n¿Desea continuar de todos modos?"
+            
+            # Mostrar diálogo de confirmación
+            respuesta = messagebox.askyesno("Alerta de Stock Negativo", mensaje)
+            return respuesta
 
     def generate_plan(self):
         if not self.validate_inputs():
@@ -210,7 +280,7 @@ class PlannerGUI:
             if not productos:
                 raise ValueError("Error al leer el dataset")
 
-            # Modificar calcular_formulas para que devuelva también los productos con stock negativo
+            # Calcular fórmulas y obtener productos con stock negativo
             productos_validos, horas_disponibles, productos_stock_negativo = calcular_formulas(
                 productos=productos,
                 fecha_inicio=fecha_inicio.strftime('%d-%m-%Y'),
@@ -221,15 +291,52 @@ class PlannerGUI:
                 gui_mode=True  # Indicar que estamos en modo GUI para no mostrar en consola
             )
 
+            # Guardar el número original de productos válidos (para logging)
+            num_productos_originales = len(productos_validos)
+            logger.info(f"Productos válidos iniciales: {num_productos_originales}")
+
             # Verificar si hay productos con stock negativo y mostrar alerta
-            if productos_stock_negativo and not self.mostrar_alerta_stock_negativo(productos_stock_negativo, fecha_dataset):
-                logger.info("Proceso interrumpido por el usuario debido a stock negativo")
-                return
+            if productos_stock_negativo:
+                # Buscar la fecha de rotura más temprana
+                fecha_rotura_temprana = None
+                for p in productos_stock_negativo:
+                    try:
+                        if 'dia_rotura' in p and p['dia_rotura'] != "N/A":
+                            fecha_rotura = datetime.strptime(p['dia_rotura'], '%d/%m/%Y')
+                            if fecha_rotura_temprana is None or fecha_rotura < fecha_rotura_temprana:
+                                fecha_rotura_temprana = fecha_rotura
+                    except Exception as e:
+                        logger.warning(f"Error al procesar fecha de rotura: {str(e)}")
+                
+                # Si se encontró una fecha de rotura, restar un día para sugerir planificación
+                fecha_sugerida = None
+                if fecha_rotura_temprana:
+                    fecha_sugerida = fecha_rotura_temprana - timedelta(days=1)
+                    
+                # Mostrar alerta y obtener respuesta
+                respuesta = self.mostrar_alerta_stock_negativo(
+                    productos_stock_negativo, 
+                    fecha_dataset, 
+                    fecha_sugerida
+                )
+                
+                # Si el usuario seleccionó actualizar la fecha, cancelar el proceso actual
+                if respuesta == "fecha_actualizada":
+                    messagebox.showinfo("Fecha actualizada", 
+                                    "La fecha de inicio ha sido actualizada con el valor recomendado. "
+                                    "Por favor, vuelva a hacer clic en 'Generar Plan' para procesar con la nueva fecha.")
+                    return
+                
+                # Si el usuario decidió cancelar, interrumpir el proceso
+                if not respuesta:
+                    logger.info("Proceso interrumpido por el usuario debido a stock negativo")
+                    return
 
             if not productos_validos:
                 raise ValueError("Error en los cálculos")
 
             # 2. Verificar pedidos pendientes
+            productos_a_planificar_adicionales = []
             df_pedidos = leer_pedidos_pendientes(fecha_dataset)
             if df_pedidos is not None:
                 productos_a_planificar_adicionales = verificar_pedidos(
@@ -239,12 +346,29 @@ class PlannerGUI:
                     fecha_inicio=fecha_inicio,
                     dias_planificacion=dias_planificacion
                 )
+                logger.info(f"Productos adicionales por pedidos pendientes: {len(productos_a_planificar_adicionales)}")
 
-                # Combinar productos válidos con los adicionales
-                productos_a_planificar = productos_validos + productos_a_planificar_adicionales
-            else:
-                productos_a_planificar = productos_validos
-
+            # Combinar productos válidos con los adicionales
+            productos_a_planificar = productos_validos + productos_a_planificar_adicionales
+            
+            # Eliminar duplicados por código de artículo
+            productos_dict = {}
+            for p in productos_a_planificar:
+                if hasattr(p, 'cod_art') and p.cod_art:
+                    if p.cod_art not in productos_dict:
+                        productos_dict[p.cod_art] = p
+                    else:
+                        # Si ya existe, mantener el que tenga menor cobertura o mayor demanda
+                        existing = productos_dict[p.cod_art]
+                        if (hasattr(p, 'cobertura_inicial') and hasattr(existing, 'cobertura_inicial') and
+                            isinstance(p.cobertura_inicial, (int, float)) and 
+                            isinstance(existing.cobertura_inicial, (int, float))):
+                            if p.cobertura_inicial < existing.cobertura_inicial:
+                                productos_dict[p.cod_art] = p
+            
+            productos_a_planificar = list(productos_dict.values())
+            logger.info(f"Productos totales a planificar (después de eliminar duplicados): {len(productos_a_planificar)}")
+            
             # 3. Aplicar Simplex
             productos_optimizados = aplicar_simplex(
                 productos_validos=productos_a_planificar,
@@ -254,7 +378,35 @@ class PlannerGUI:
             )
             
             if not productos_optimizados:
-                raise ValueError("Error en la optimización")
+                logger.error("La optimización no produjo resultados. Verificando otras alternativas...")
+                # Si la optimización falló pero teníamos productos válidos, intentar planificar los más urgentes
+                if productos_a_planificar:
+                    # Ordenar por cobertura (menor primero) y tomar los 10 más urgentes
+                    productos_a_planificar.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
+                    productos_urgentes = productos_a_planificar[:min(10, len(productos_a_planificar))]
+                    logger.info(f"Intentando planificar {len(productos_urgentes)} productos urgentes como alternativa")
+                    
+                    # Intentar asignar producción mínima a cada uno
+                    for p in productos_urgentes:
+                        if hasattr(p, 'cajas_hora_reales') and p.cajas_hora_reales > 0:
+                            p.horas_necesarias = 2.0  # Mínimo 2 horas
+                            p.cajas_a_producir = round(p.horas_necesarias * p.cajas_hora_reales)
+                            p.cobertura_final_plan = (p.stock_inicial + p.cajas_a_producir) / p.demanda_media
+                        else:
+                            logger.warning(f"Producto {p.cod_art}: cajas_hora_reales es cero o no está definido")
+                    
+                    productos_optimizados = [p for p in productos_urgentes if hasattr(p, 'horas_necesarias') and p.horas_necesarias > 0]
+                    logger.info(f"Productos planificados alternativamente: {len(productos_optimizados)}")
+                    
+                    if not productos_optimizados:
+                        raise ValueError("No se pudo generar ningún plan de producción")
+                else:
+                    raise ValueError("No hay productos válidos para optimizar")
+            
+            # Log para verificación
+            logger.info(f"Productos optimizados finales: {len(productos_optimizados)}")
+            for i, p in enumerate(productos_optimizados[:5]):  # Mostrar solo los primeros 5 para no saturar el log
+                logger.info(f"Producto {i+1}: {p.cod_art} - Horas: {p.horas_necesarias:.2f} - Cajas: {p.cajas_a_producir}")
             
             # 4. Exportar resultados
             resultado_ocupacion = exportar_resultados(
@@ -267,7 +419,7 @@ class PlannerGUI:
             )
             
             # Mostrar mensaje de éxito con información de ocupación
-            mensaje_exito = "Plan generado y exportado correctamente."
+            mensaje_exito = f"Plan generado y exportado correctamente. Se planificaron {len(productos_optimizados)} productos."
             if resultado_ocupacion:
                 mensaje_exito += f"\n\nOcupación de almacén al final de la planificación: {resultado_ocupacion['ocupacion_fin']['total_ubicaciones']} ubicaciones."
             
@@ -275,6 +427,8 @@ class PlannerGUI:
             
         except Exception as e:
             logger.error(f"Error generando plan: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             messagebox.showerror("Error", f"Error generando plan:\n{str(e)}")
 
 def main():
