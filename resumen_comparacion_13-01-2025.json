@@ -1,0 +1,99 @@
+{
+    "Fecha": "13/01/2025",
+    "Productos": {
+        "Propuesto": 26,
+        "Calendario": 25,
+        "Comunes": 16,
+        "Solo Propuesto": 11,
+        "Solo Calendario": 9
+    },
+    "Horas": {
+        "Propuesto": 128.0,
+        "Calendario": 112.0,
+        "Diferencia": -16.0
+    },
+    "Distribucion Dias": {
+        "Propuesto": {
+            "1": 24.0,
+            "2": 26.0,
+            "3": 22.0,
+            "4": 32.0,
+            "5": 16.0,
+            "6": 8.0
+        },
+        "Calendario": {
+            "1": 24.0,
+            "2": 24.0,
+            "3": 23.5,
+            "4": 24.0,
+            "5": 16.5
+        }
+    },
+    "Distribucion Grupos": {
+        "Propuesto": {
+            "MEC": 72.0,
+            "VIME": 48.0
+        },
+        "Calendario": {
+            "MEC": 45.5,
+            "VIME": 66.5
+        }
+    },
+    "Diferencias Productos": {
+        "430621": {
+            "Propuesto": 12.0,
+            "Calendario": 3.0,
+            "Diferencia": -9.0
+        },
+        "453251": {
+            "Propuesto": 16.0,
+            "Calendario": 11.0,
+            "Diferencia": -5.0
+        },
+        "434721": {
+            "Propuesto": 3.0,
+            "Calendario": 17.0,
+            "Diferencia": 14.0
+        },
+        "430401": {
+            "Propuesto": 3.0,
+            "Calendario": 5.5,
+            "Diferencia": 2.5
+        },
+        "403801": {
+            "Propuesto": 2.0,
+            "Calendario": 4.0,
+            "Diferencia": 2.0
+        },
+        "5720811": {
+            "Propuesto": 12.0,
+            "Calendario": 22.5,
+            "Diferencia": 10.5
+        },
+        "432111": {
+            "Propuesto": 3.0,
+            "Calendario": 4.0,
+            "Diferencia": 1.0
+        },
+        "432211": {
+            "Propuesto": 2.0,
+            "Calendario": 6.0,
+            "Diferencia": 4.0
+        },
+        "432821": {
+            "Propuesto": 3.0,
+            "Calendario": 2.0,
+            "Diferencia": -1.0
+        },
+        "434201": {
+            "Propuesto": 3.0,
+            "Calendario": 2.5,
+            "Diferencia": -0.5
+        },
+        "431610": {
+            "Propuesto": 2.0,
+            "Calendario": 6.5,
+            "Diferencia": 4.5
+        }
+    }
+}

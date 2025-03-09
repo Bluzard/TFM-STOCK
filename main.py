@@ -3,9 +3,11 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkcalendar import DateEntry
 from datetime import datetime, timedelta
+import pandas as pd
 import os
 from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_dataset_existe
 from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
+from comparador import cargar_planning_propuesto, comparar_calendarios, generar_mensaje_comparacion
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -418,10 +420,45 @@ class PlannerGUI:
                 dias_cobertura_base=dias_cobertura
             )
             
+            # 5. Cargar y comparar con planning propuesto
+            try:
+                # Obtener el nombre del archivo del calendario generado
+                nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_inicio.strftime('%d-%m-%Y')}.csv"
+                
+                # Verificar si existe el calendario generado
+                if os.path.exists(nombre_calendario):
+                    # Cargar el calendario generado
+                    df_calendario = pd.read_csv(nombre_calendario, sep=';', encoding='utf-8-sig')
+                    
+                    # Cargar el planning propuesto
+                    df_propuesto = cargar_planning_propuesto(fecha_inicio)
+                    
+                    # Si existe el planning propuesto, hacer la comparación
+                    if df_propuesto is not None:
+                        logger.info("Iniciando comparación entre calendario generado y planning propuesto...")
+                        resumen_comparacion = comparar_calendarios(df_propuesto, df_calendario, fecha_inicio, fecha_dataset)
+                        
+                        # Generar mensaje de comparación formateado
+                        mensaje_comparacion = generar_mensaje_comparacion(resumen_comparacion)
+                    else:
+                        logger.info("No se encontró un planning propuesto para comparar.")
+                        mensaje_comparacion = ""  # No hay planning propuesto, no mostrar nada
+                else:
+                    logger.warning(f"No se encontró el calendario generado: {nombre_calendario}")
+                    mensaje_comparacion = ""  # No se encontró el calendario generado
+            except Exception as e:
+                logger.error(f"Error en comparación de plannings: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                mensaje_comparacion = "\n\nOcurrió un error al intentar comparar con el planning propuesto."
+            
             # Mostrar mensaje de éxito con información de ocupación
             mensaje_exito = f"Plan generado y exportado correctamente. Se planificaron {len(productos_optimizados)} productos."
             if resultado_ocupacion:
                 mensaje_exito += f"\n\nOcupación de almacén al final de la planificación: {resultado_ocupacion['ocupacion_fin']['total_ubicaciones']} ubicaciones."
+            
+            # Añadir información de comparación si existe
+            mensaje_exito += mensaje_comparacion
             
             messagebox.showinfo("Éxito", mensaje_exito)
             
