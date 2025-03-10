@@ -418,3 +418,5 @@ def generar_mensaje_comparacion(resumen_comparacion):
     except Exception as e:
         logger.error(f"Error generando mensaje de comparación: {str(e)}")
         return "\n\nSe realizó la comparación pero ocurrió un error al generar el mensaje detallado."
+    
+

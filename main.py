@@ -64,7 +64,7 @@ class PlannerGUI:
         # Horas mantenimiento
         ttk.Label(main_frame, text="Horas Mantenimiento/Pruebas:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.combo_horas_mant = ttk.Combobox(main_frame, textvariable=self.horas_mantenimiento, 
-                                          values=["4", "5", "6", "7", "8", "9", "10", "11", "12"], 
+                                          values=["0","1", "2", "3","4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"], 
                                           width=10, state="readonly")
         self.combo_horas_mant.current(4)  # Seleccionar 8 por defecto
         self.combo_horas_mant.grid(row=5, column=1, sticky=tk.W)
@@ -140,8 +140,8 @@ class PlannerGUI:
                     raise e
                 
             horas_mantenimiento = int(self.horas_mantenimiento.get())
-            if horas_mantenimiento < 4 or horas_mantenimiento > 12:
-                raise ValueError("Las horas de mantenimiento deben estar entre 4 y 12")
+            if horas_mantenimiento < 0 or horas_mantenimiento > 16:
+                raise ValueError("Las horas de mantenimiento deben estar entre 0 y 16")
                 
             dias_cobertura = int(self.dias_cobertura.get())
             if dias_cobertura < 3 or dias_cobertura > 12:
