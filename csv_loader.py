@@ -178,15 +178,22 @@ def verificar_dataset_existe(nombre_archivo):
 
 def leer_pedidos_pendientes(fecha_dataset):
     """
-    Lee y procesa el archivo de pedidos pendientes con formato específico "Pedidos pendientes DD-MM-YY".
+    Lee y procesa el archivo de pedidos pendientes con el formato específico.
     
     Args:
-        fecha_dataset: Fecha del dataset (datetime o string en formato DD-MM-YY)
+        fecha_dataset: Fecha del dataset (datetime o string en formato DD-MM-YYYY)
         
     Returns:
         DataFrame con los pedidos pendientes procesados, o None si hay un error
     """
     try:
+        import os
+        import pandas as pd
+        from datetime import datetime
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
         # Formatear la fecha para el nombre de archivo
         if isinstance(fecha_dataset, datetime):
             fecha_str = fecha_dataset.strftime('%d-%m-%y')
@@ -194,182 +201,133 @@ def leer_pedidos_pendientes(fecha_dataset):
             # Si ya es string, normalizar formato
             fecha_str = fecha_dataset
             
-            # Intentar convertir si el formato es DD-MM-YYYY
-            if len(fecha_str.split('-')[2]) == 4:  # Año con 4 dígitos
+            # Si el formato es DD-MM-YYYY, convertir a DD-MM-YY
+            if len(fecha_str.split('-')[2]) == 4:
                 fecha_dt = datetime.strptime(fecha_str, '%d-%m-%Y')
                 fecha_str = fecha_dt.strftime('%d-%m-%y')
         
-        # Nombre de archivo esperado (formato exacto)
-        archivo_pedidos = f'Pedidos pendientes {fecha_str}'
+        # Nombre del archivo
+        archivo_pedidos = f'Pedidos pendientes {fecha_str}.csv'
         
-        # Comprobar si existe con diferentes extensiones
-        for ext in ['.csv', '.txt']:
-            if os.path.exists(archivo_pedidos + ext):
-                archivo_pedidos = archivo_pedidos + ext
-                break
-        
-        # Si no encontramos el archivo, buscar alternativas
+        # Verificar si existe el archivo
         if not os.path.exists(archivo_pedidos):
-            # Intentar con otros formatos de fecha
-            alternativas = []
-            
-            # Probar sin guiones
-            fecha_sin_guiones = fecha_str.replace('-', '')
-            alternativas.append(f'Pedidos pendientes {fecha_sin_guiones}')
-            
-            # Probar con diferentes separadores
-            for sep in ['_', ' ']:
-                alternativas.append(f'Pedidos{sep}pendientes{sep}{fecha_str}')
-                alternativas.append(f'Pedidos{sep}pendientes{sep}{fecha_sin_guiones}')
-            
-            # Verificar cada alternativa
-            for alt in alternativas:
-                for ext in ['.csv', '.txt']:
-                    if os.path.exists(alt + ext):
-                        archivo_pedidos = alt + ext
-                        break
-                if os.path.exists(archivo_pedidos):
-                    break
-            
-            # Si todavía no existe, buscar cualquier archivo de pedidos
-            if not os.path.exists(archivo_pedidos):
-                for archivo in os.listdir('.'):
-                    if archivo.startswith('Pedidos pendientes') and (archivo.endswith('.csv') or archivo.endswith('.txt')):
-                        archivo_pedidos = archivo
-                        break
-        
-        # Verificar si se encontró un archivo
-        if not os.path.exists(archivo_pedidos):
-            logger.warning(f"No se encontró el archivo de pedidos pendientes para la fecha {fecha_str}")
+            logger.warning(f"No se encontró el archivo: {archivo_pedidos}")
             return None
             
         logger.info(f"Leyendo archivo de pedidos pendientes: {archivo_pedidos}")
         
-        # Detectar qué formato tiene el archivo
-        with open(archivo_pedidos, 'r', encoding='latin1') as f:
-            primera_linea = f.readline().strip()
-            
-        # Determinar separador
-        if '\t' in primera_linea:
-            separador = '\t'
-        elif ';' in primera_linea:
-            separador = ';'
-        else:
-            separador = ','
-            
-        # Leer según el formato detectado
+        # Para este formato específico, leer saltando la primera fila
         try:
-            df_pedidos = pd.read_csv(archivo_pedidos, sep=separador, encoding='latin1')
+            # Leer el archivo con pandas empezando desde la segunda fila
+            df_pedidos = pd.read_csv(archivo_pedidos, sep=';', encoding='latin1', skiprows=1)
+            
+            # Asegurarse de que 'COD_ART' está en las columnas
+            if 'COD_ART' not in df_pedidos.columns and df_pedidos.shape[1] > 0:
+                # Renombrar la primera columna a COD_ART
+                df_pedidos = df_pedidos.rename(columns={df_pedidos.columns[0]: 'COD_ART'})
+                logger.info(f"Renombrando primera columna a 'COD_ART'")
+            
+            # Si 'NOM_ART' no está, renombrar la segunda columna
+            if 'NOM_ART' not in df_pedidos.columns and df_pedidos.shape[1] > 1:
+                df_pedidos = df_pedidos.rename(columns={df_pedidos.columns[1]: 'NOM_ART'})
+                logger.info(f"Renombrando segunda columna a 'NOM_ART'")
+            
+            # Identificar columnas de fechas (columnas que no son COD_ART ni NOM_ART)
+            columnas_fechas = [col for col in df_pedidos.columns 
+                              if col not in ['COD_ART', 'NOM_ART'] and '/' in col]
+            
+            # Convertir columnas de fechas a numéricas
+            for col in columnas_fechas:
+                df_pedidos[col] = pd.to_numeric(df_pedidos[col], errors='coerce').fillna(0)
+            
+            # Asegurar que COD_ART es string
+            df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
+            
+            logger.info(f"Pedidos pendientes procesados: {len(df_pedidos)} productos")
+            logger.info(f"Columnas de fechas identificadas: {len(columnas_fechas)}")
+            
+            return df_pedidos
+            
         except Exception as e:
-            logger.warning(f"Error leyendo con separador '{separador}': {str(e)}")
+            logger.error(f"Error procesando archivo con formato estándar: {str(e)}")
+            
+            # Intento alternativo: leer manualmente
             try:
-                # Intentar con otro separador
-                otro_separador = '\t' if separador != '\t' else ';'
-                df_pedidos = pd.read_csv(archivo_pedidos, sep=otro_separador, encoding='latin1')
-            except Exception as e2:
-                logger.error(f"No se pudo leer el archivo con ningún separador estándar: {str(e2)}")
-                # Leer como texto plano
-                with open(archivo_pedidos, 'r', encoding='latin1') as f:
-                    lineas = f.readlines()
+                with open(archivo_pedidos, 'r', encoding='latin1') as file:
+                    lineas = file.readlines()
                 
-                # Encontrar las columnas de fechas (formato DD/MM/YYYY o similar)
-                headers = lineas[0].strip().split(separador)
+                # Ignorar la primera línea
+                encabezados = lineas[1].strip().split(';')
                 
-                # Buscar columna de COD_ART o similar
-                cod_art_col = None
-                for i, h in enumerate(headers):
-                    if 'COD' in h or 'ART' in h or 'codigo' in h.lower() or 'código' in h.lower():
-                        cod_art_col = i
-                        break
+                # Buscar índices de columnas importantes
+                idx_cod_art = 0  # Primera columna
+                idx_nom_art = 1  # Segunda columna
                 
-                if cod_art_col is None:
-                    logger.error("No se pudo identificar la columna de código de artículo")
-                    return None
+                # Crear diccionario para almacenar datos
+                data = {
+                    'COD_ART': [],
+                    'NOM_ART': []
+                }
                 
-                # Crear datos manualmente
-                data = {'COD_ART': []}
-                fecha_cols = []
+                # Añadir columnas de fechas (a partir de la tercera columna)
+                fechas = encabezados[2:]
+                for fecha in fechas:
+                    if fecha.strip():  # Solo si no está vacía
+                        data[fecha] = []
                 
-                # Identificar columnas de fechas
-                for i, h in enumerate(headers):
-                    if i != cod_art_col and not h.startswith('Suma') and not h.startswith('Total'):
-                        try:
-                            # Intentar interpretar como fecha
-                            datetime.strptime(h, '%d/%m/%Y')
-                            fecha_cols.append(i)
-                            data[h] = []
-                        except:
+                # Procesar líneas de datos (a partir de la tercera línea)
+                for i in range(2, len(lineas)):
+                    if not lineas[i].strip():
+                        continue
+                        
+                    campos = lineas[i].strip().split(';')
+                    
+                    # Añadir código y nombre
+                    if len(campos) > idx_cod_art:
+                        data['COD_ART'].append(campos[idx_cod_art])
+                    else:
+                        continue  # Saltar línea si no hay código
+                        
+                    if len(campos) > idx_nom_art:
+                        data['NOM_ART'].append(campos[idx_nom_art])
+                    else:
+                        data['NOM_ART'].append("")
+                    
+                    # Procesar fechas
+                    for j, fecha in enumerate(fechas):
+                        if not fecha.strip():
+                            continue
+                            
+                        idx = j + 2  # Offset para las columnas de fechas
+                        if idx < len(campos) and campos[idx].strip():
                             try:
-                                # Otro formato de fecha
-                                datetime.strptime(h, '%d/%m/%y')
-                                fecha_cols.append(i)
-                                data[h] = []
+                                # Convertir a número (los pedidos son valores negativos)
+                                valor = float(campos[idx].replace(',', '.'))
+                                data[fecha].append(valor)
                             except:
-                                # No es fecha, pero podría ser una columna importante
-                                if h.strip():
-                                    data[h] = []
-                
-                # Procesar datos
-                for linea in lineas[1:]:
-                    if not linea.strip():
-                        continue
-                    
-                    campos = linea.strip().split(separador)
-                    if len(campos) <= cod_art_col:
-                        continue
-                    
-                    # Añadir código de artículo
-                    data['COD_ART'].append(campos[cod_art_col])
-                    
-                    # Añadir valores de fechas (cantidades)
-                    for i, col in enumerate(headers):
-                        if i in fecha_cols and col in data:
-                            if i < len(campos):
-                                try:
-                                    # Convertir a número negativo (pedidos son negativos)
-                                    valor = float(campos[i])
-                                    data[col].append(valor)
-                                except:
-                                    data[col].append(0)
-                            else:
-                                data[col].append(0)
+                                data[fecha].append(0)
+                        else:
+                            data[fecha].append(0)
                 
                 # Crear DataFrame
                 df_pedidos = pd.DataFrame(data)
-        
-        # Verificar columnas y ajustar si es necesario
-        if 'COD_ART' not in df_pedidos.columns:
-            # Buscar columna alternativa
-            for col in df_pedidos.columns:
-                if 'cod' in col.lower() or 'art' in col.lower() or 'código' in col.lower() or 'codigo' in col.lower():
-                    df_pedidos.rename(columns={col: 'COD_ART'}, inplace=True)
-                    break
-            else:
-                # Si no se encuentra, usar la primera columna no numérica
-                for col in df_pedidos.columns:
-                    if df_pedidos[col].dtype == 'object':
-                        df_pedidos.rename(columns={col: 'COD_ART'}, inplace=True)
-                        break
-        
-        # Convertir valores de fechas a números negativos (pedidos)
-        for col in df_pedidos.columns:
-            if col != 'COD_ART' and col != 'NOM_ART':
-                try:
-                    df_pedidos[col] = pd.to_numeric(df_pedidos[col], errors='coerce').fillna(0)
-                except:
-                    pass
-        
-        # Asegurar que COD_ART sea string
-        df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
-        
-        # Mostrar información del resultado
-        logger.info(f"Pedidos pendientes cargados: {len(df_pedidos)} productos")
-        logger.info(f"Columnas de fechas: {[col for col in df_pedidos.columns if col not in ['COD_ART', 'NOM_ART']]}")
-        
-        return df_pedidos
-        
+                
+                # Asegurar que COD_ART es string
+                df_pedidos['COD_ART'] = df_pedidos['COD_ART'].astype(str)
+                
+                logger.info(f"Pedidos pendientes procesados manualmente: {len(df_pedidos)} productos")
+                logger.info(f"Columnas identificadas: {list(data.keys())}")
+                
+                return df_pedidos
+                
+            except Exception as e:
+                logger.error(f"Error en procesamiento manual: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return None
+    
     except Exception as e:
-        logger.error(f"Error leyendo pedidos pendientes: {str(e)}")
+        logger.error(f"Error general en leer_pedidos_pendientes: {str(e)}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None

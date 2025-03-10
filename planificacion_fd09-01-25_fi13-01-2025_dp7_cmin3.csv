@@ -2,12 +2,12 @@
 434721;Bollito Easy;VIME;Planificado;INICIO;34,47;175,13;1949;17,0;5,08;61,63;-1,92;75,86;2124,13
 453251;Panecillo 100% Integral;VIME;Planificado;INICIO;106,4;826,4;1110;11,0;7,77;18,2;0,77;69,16;1936,4
 430401;Mini Panecillo Easy;VIME;Planificado;INICIO;38,5;563,0;630;5,5;14,62;30,99;7,62;42,61;1193,0
-431610;Bollito 100% Integral Easy Pack 8 unidades;VIME;Planificado;INICIO;12,85;364,59;751;6,5;28,37;86,8;21,37;39,84;1115,59
+431610;Bollito 100% Integral Easy Pack 8 unidades;VIME;Planificado;INICIO;12,85;364,59;1156;10,0;28,37;118,31;21,37;54,31;1520,59
 432211;Pepito con Salvado Easy;MEC;Planificado;;53,81;777,77;848;6,0;14,45;30,21;7,45;67,74;1625,77
 432111;Pepito Sin Sal Añadida Easy;MEC;Planificado;;11,39;170,43;565;4,0;14,96;64,55;7,96;26,27;735,43
 430621;Pepito Easy;MEC;Planificado;;93,3;1499,8;424;3,0;16,08;20,62;9,08;80,16;1923,8
 403801;Mini Viena Andaluza;MEC;Planificado;;6,6;113,6;699;4,0;17,21;123,12;10,21;29,02;812,6
-434201;Viena Easy;MEC;Planificado;;41,55;810,79;394;2,5;19,51;29,0;12,51;43,03;1204,79
+434201;Viena Easy;MEC;Planificado;;41,55;810,79;473;3,0;19,51;30,9;12,51;45,85;1283,79
 432821;Pan Bocadillo Easy;MEC;Planificado;;27,3;728,8;289;2,0;26,7;37,28;19,7;36,35;1017,8
 406301;Viena Mondat con Salvado 145 gr;MEC;Planificado;;17,1;578,6;381;2,0;33,84;56,12;26,84;34,27;959,6
 400231;Pepito;MEC;Planificado;;14,1;523,0;272;2,0;37,09;56,38;30,09;28,39;795,0
@@ -35,7 +35,7 @@
 432501;Pan Bocadillo con Salvado Easy;MEC;No válido;;0,0;0,0;0;0,0;0,0;0,0;0,0;0,0;0,0
 434111;Panecito con Salvado Sin Sal Añadida Easy;MEC;No válido;;0,0;643,0;0;0,0;0,0;0,0;0,0;22,96;643,0
 402011;Viena Mondat 145 gr;MEC;No válido;;56,5;1307,4;0;0,0;23,14;0,0;16,14;46,69;1307,4
-403341;Barra de Viena;MEC;No válido;;26,9;1239,35;0;0,0;46,07;0,0;39,07;44,26;1239,35
+403341;Barra de Viena;MEC;No válido;;26,9;1239,35;514;2,5;46,07;0,0;39,07;62,62;1753,35
 5718619;Pulguita;MEC;No válido;;49,24;2911,63;0;0,0;59,13;0,0;52,13;103,99;2911,63
 430731;Panecito Easy;MEC;No válido;;25,5;1616,0;0;0,0;63,37;0,0;56,37;57,71;1616,0
 401111;Bocata;MEC;No válido;;16,42;1189,28;0;0,0;72,44;0,0;65,44;42,47;1189,28

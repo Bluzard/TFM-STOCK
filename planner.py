@@ -262,17 +262,15 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 producto.cobertura_maxima = 120.0
                 
             producto.cobertura_actual = producto.stock_inicial / producto.demanda_media if producto.demanda_media > 0 else float('inf')
-            
-            # Log para cada producto
-            logger.info(f"Producto {producto.cod_art}: demanda={producto.demanda_media:.2f}, " +
-                       f"cobertura_actual={producto.cobertura_actual:.2f}, cobertura_max={producto.cobertura_maxima}")
+           
         
         # Filtrar productos que ya tienen cobertura igual o superior a la máxima
         productos_filtrados = []
         for producto in productos_validos:
             # Si la cobertura actual ya supera la máxima, no planificar
             if producto.cobertura_actual >= producto.cobertura_maxima:
-                logger.info(f"Producto {producto.cod_art} ya tiene cobertura suficiente: {producto.cobertura_actual:.2f} días >= máximo {producto.cobertura_maxima} días")
+                # no hacer nada
+                pass
             else:
                 productos_filtrados.append(producto)
         
@@ -286,11 +284,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         
         # Ordenar por cobertura (menor primero) para priorización
         productos_validos.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
-        
-        # Mostrar los 10 productos con menor cobertura
-        logger.info("TOP 10 productos prioritarios:")
-        for i, p in enumerate(productos_validos[:10]):
-            logger.info(f"{i+1}. {p.cod_art}: cobertura={p.cobertura_inicial:.2f}, demanda={p.demanda_media:.2f}")
         
         # Primera fase: Intentar optimización 
         try:
@@ -344,9 +337,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 
                 bounds.append((min_cajas, max_cajas))
                 
-                # Log detallado para cada producto
-                logger.info(f"Producto {producto.cod_art}: cobertura_actual={producto.cobertura_actual:.2f}/{producto.cobertura_maxima}, " +
-                         f"restante={cobertura_restante:.2f}, bounds=({min_cajas:.2f}, {max_cajas:.2f})")
             
             # Ejecutar optimización
             result = linprog(
@@ -448,8 +438,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                     
                     # Verificar si excede la cobertura máxima permitida
                     if cobertura_final > producto.cobertura_maxima:
-                        logger.warning(f"Ajustando producto {producto.cod_art}: cobertura {cobertura_final:.2f} > máxima {producto.cobertura_maxima}")
-                        
+                       
                         # Calcular cajas necesarias para llegar exactamente a la cobertura máxima
                         cajas_maximas = max(0, (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial)
                         
@@ -460,7 +449,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                         if cajas_maximas < cajas_minimas:
                             # Si no podemos respetar la cobertura máxima con 2 horas mínimo,
                             # priorizamos las 2 horas mínimo
-                            logger.info(f"Producto {producto.cod_art}: Se prioriza 2 horas mínimas aunque exceda cobertura máxima de {producto.cobertura_maxima}")
                             producto.cajas_a_producir = round(cajas_minimas)
                         else:
                             # Podemos respetar tanto la cobertura máxima como las 2 horas mínimo
@@ -491,7 +479,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
         
         # VERIFICACIÓN: Asegurar que nunca excedamos las horas disponibles
         if total_horas_planificadas > horas_disponibles:
-            logger.warning(f"Ajustando plan: {total_horas_planificadas:.2f} horas exceden las {horas_disponibles:.2f} disponibles")
             
             # Ordenar productos por cobertura (mayor primero)
             productos_con_produccion.sort(key=lambda p: (-p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else -float('inf')))
@@ -635,8 +622,7 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
             
             # Si supera la cobertura máxima y no es por la restricción de 2 horas mínimas, ajustar
             if cobertura_final > producto.cobertura_maxima and cobertura_minima_viable <= producto.cobertura_maxima:
-                logger.warning(f"Ajuste final: Producto {producto.cod_art} excede cobertura máxima ({cobertura_final:.2f} > {producto.cobertura_maxima})")
-                
+               
                 # Calcular cajas para cobertura exacta
                 cajas_exactas = (producto.cobertura_maxima * producto.demanda_media) - producto.stock_inicial
                 producto.cajas_a_producir = round(cajas_exactas)
@@ -652,7 +638,6 @@ def aplicar_simplex(productos_validos, horas_disponibles, dias_planificacion, di
                 producto.cajas_a_producir = round(producto.horas_necesarias * producto.cajas_hora_reales)
                 producto.cobertura_final_plan = (producto.stock_inicial + producto.cajas_a_producir) / producto.demanda_media
                 
-                logger.info(f"Producto {producto.cod_art} ajustado a {producto.cobertura_final_plan:.2f} días de cobertura")
         
         # Ordenar productos por cobertura (menor primero) para el resultado final
         productos_con_produccion.sort(key=lambda p: p.cobertura_inicial if isinstance(p.cobertura_inicial, (int, float)) else float('inf'))
@@ -760,6 +745,11 @@ def verificar_pedidos(productos, df_pedidos, fecha_dataset, fecha_inicio, dias_p
     try:
         if df_pedidos is None or df_pedidos.empty:
             logger.info("No hay datos de pedidos pendientes para verificar")
+            return []
+            
+        logger.info(f"Verificando pedidos pendientes para {len(productos)} productos desde {fecha_inicio.strftime('%d/%m/%Y')}")
+        if 'COD_ART' not in df_pedidos.columns:
+            logger.error("El DataFrame de pedidos no contiene la columna COD_ART")
             return []
             
         logger.info(f"Verificando pedidos pendientes para {len(productos)} productos desde {fecha_inicio.strftime('%d/%m/%Y')}")
