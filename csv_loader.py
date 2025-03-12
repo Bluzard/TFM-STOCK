@@ -207,7 +207,7 @@ def leer_pedidos_pendientes(fecha_dataset):
                 fecha_str = fecha_dt.strftime('%d-%m-%y')
         
         # Nombre del archivo
-        archivo_pedidos = os.path.join('Pendientes', f'Pedidos pendientes {fecha_str}.csv')
+        archivo_pedidos = os.path.join('Pedidos', f'Pedidos pendientes {fecha_str}.csv')
        
         # Verificar si existe el archivo
         if not os.path.exists(archivo_pedidos):
