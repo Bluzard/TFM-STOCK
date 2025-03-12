@@ -24,7 +24,7 @@ class PlannerGUI:
         self.dias_planificacion = tk.StringVar(value="7")  # Valor por defecto
         self.dias_no_habiles = tk.StringVar(value="2")  # Valor por defecto
         self.horas_mantenimiento = tk.StringVar(value="8")  # Valor por defecto
-        self.dias_cobertura = tk.StringVar(value="3")  # Valor por defecto
+        self.dias_cobertura = tk.StringVar(value="7")  # Valor por defecto
         
         self.create_widgets()
         
@@ -66,7 +66,7 @@ class PlannerGUI:
         self.combo_horas_mant = ttk.Combobox(main_frame, textvariable=self.horas_mantenimiento, 
                                           values=["0","1", "2", "3","4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"], 
                                           width=10, state="readonly")
-        self.combo_horas_mant.current(4)  # Seleccionar 8 por defecto
+        self.combo_horas_mant.current(8)  # Seleccionar 8 por defecto
         self.combo_horas_mant.grid(row=5, column=1, sticky=tk.W)
         
         # Días cobertura
@@ -74,11 +74,16 @@ class PlannerGUI:
         self.combo_dias_cobertura = ttk.Combobox(main_frame, textvariable=self.dias_cobertura, 
                                               values=["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], 
                                               width=10, state="readonly")
-        self.combo_dias_cobertura.current(0)  # Seleccionar 3 por defecto
+        self.combo_dias_cobertura.current(7)  # Seleccionar 3 por defecto
         self.combo_dias_cobertura.grid(row=6, column=1, sticky=tk.W)
         
         # Botón generar
         ttk.Button(main_frame, text="Generar Plan", command=self.generate_plan).grid(row=8, column=1, pady=20)
+
+        # Botón comparar resultado
+        ttk.Button(main_frame, text="Comparar Resultado", command=self.comparar_resultado).grid(row=9, column=1, pady=10)
+
+
         
     def browse_file(self):
         filetypes = (
@@ -260,6 +265,75 @@ class PlannerGUI:
             # Mostrar diálogo de confirmación
             respuesta = messagebox.askyesno("Alerta de Stock Negativo", mensaje)
             return respuesta
+    def comparar_resultado(self):
+        """Función para comparar el resultado generado con el planning propuesto"""
+        try:
+            # Verificar que tenemos todos los datos necesarios
+            if not self.dataset_date.get():
+                messagebox.showerror("Error", "Debe seleccionar un dataset primero")
+                return
+                
+            fecha_dataset = datetime.strptime(self.dataset_date.get(), '%d/%m/%Y')
+            fecha_planificacion = self.fecha_inicio.get_date()
+            
+            # Obtener el nombre del archivo del calendario generado
+            nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_planificacion.strftime('%d-%m-%Y')}.csv"
+            
+            # Verificar si existe el calendario generado
+            if not os.path.exists(nombre_calendario):
+                messagebox.showerror("Error", f"No se encontró el calendario generado: {nombre_calendario}")
+                return
+                
+            # Cargar el calendario generado
+            df_calendario = pd.read_csv(nombre_calendario, sep=';', encoding='utf-8-sig')
+            
+            # Cargar el planning propuesto de la carpeta Planning
+            df_propuesto = cargar_planning_propuesto(fecha_planificacion, carpeta="Planning")
+            
+            # Si existe el planning propuesto, hacer la comparación
+            if df_propuesto is not None:
+                logger.info("Iniciando comparación entre calendario generado y planning propuesto...")
+                resumen_comparacion = comparar_calendarios(df_propuesto, df_calendario, fecha_planificacion, fecha_dataset)
+                
+                # Generar mensaje de comparación formateado
+                mensaje_comparacion = generar_mensaje_comparacion(resumen_comparacion)
+                
+                # Crear una ventana para mostrar los resultados de la comparación
+                ventana_comparacion = tk.Toplevel(self.root)
+                ventana_comparacion.title("Comparación de Plannings")
+                ventana_comparacion.geometry("700x500")
+                
+                # Texto con scroll
+                frame_scroll = ttk.Frame(ventana_comparacion)
+                frame_scroll.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+                
+                # Scrollbar
+                scrollbar = ttk.Scrollbar(frame_scroll)
+                scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                
+                # Área de texto
+                texto_comparacion = tk.Text(frame_scroll, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+                texto_comparacion.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                
+                # Configurar scrollbar
+                scrollbar.config(command=texto_comparacion.yview)
+                
+                # Insertar mensaje
+                texto_comparacion.insert(tk.END, mensaje_comparacion)
+                
+                # Botón para cerrar
+                ttk.Button(ventana_comparacion, text="Cerrar", command=ventana_comparacion.destroy).pack(pady=10)
+                
+                # Hacer read-only el texto
+                texto_comparacion.config(state=tk.DISABLED)
+            else:
+                messagebox.showinfo("Información", "No se encontró un planning propuesto para comparar.")
+                
+        except Exception as e:
+            logger.error(f"Error en comparación: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            messagebox.showerror("Error", f"Error en comparación:\n{str(e)}")
 
     def generate_plan(self):
         if not self.validate_inputs():
@@ -420,45 +494,12 @@ class PlannerGUI:
                 dias_cobertura_base=dias_cobertura
             )
             
-            # 5. Cargar y comparar con planning propuesto
-            try:
-                # Obtener el nombre del archivo del calendario generado
-                nombre_calendario = f"calendario_fd{fecha_dataset.strftime('%d-%m-%y')}_fi{fecha_inicio.strftime('%d-%m-%Y')}.csv"
-                
-                # Verificar si existe el calendario generado
-                if os.path.exists(nombre_calendario):
-                    # Cargar el calendario generado
-                    df_calendario = pd.read_csv(nombre_calendario, sep=';', encoding='utf-8-sig')
-                    
-                    # Cargar el planning propuesto
-                    df_propuesto = cargar_planning_propuesto(fecha_inicio)
-                    
-                    # Si existe el planning propuesto, hacer la comparación
-                    if df_propuesto is not None:
-                        logger.info("Iniciando comparación entre calendario generado y planning propuesto...")
-                        resumen_comparacion = comparar_calendarios(df_propuesto, df_calendario, fecha_inicio, fecha_dataset)
-                        
-                        # Generar mensaje de comparación formateado
-                        mensaje_comparacion = generar_mensaje_comparacion(resumen_comparacion)
-                    else:
-                        logger.info("No se encontró un planning propuesto para comparar.")
-                        mensaje_comparacion = ""  # No hay planning propuesto, no mostrar nada
-                else:
-                    logger.warning(f"No se encontró el calendario generado: {nombre_calendario}")
-                    mensaje_comparacion = ""  # No se encontró el calendario generado
-            except Exception as e:
-                logger.error(f"Error en comparación de plannings: {str(e)}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                mensaje_comparacion = "\n\nOcurrió un error al intentar comparar con el planning propuesto."
             
             # Mostrar mensaje de éxito con información de ocupación
             mensaje_exito = f"Plan generado y exportado correctamente. Se planificaron {len(productos_optimizados)} productos."
             if resultado_ocupacion:
                 mensaje_exito += f"\n\nOcupación de almacén al final de la planificación: {resultado_ocupacion['ocupacion_fin']['total_ubicaciones']} ubicaciones."
             
-            # Añadir información de comparación si existe
-            mensaje_exito += mensaje_comparacion
             
             messagebox.showinfo("Éxito", mensaje_exito)
             
@@ -467,6 +508,7 @@ class PlannerGUI:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             messagebox.showerror("Error", f"Error generando plan:\n{str(e)}")
+
 
 def main():
     root = tk.Tk()

@@ -41,47 +41,37 @@ def procesar_horas_string(valor_str):
         logger.warning(f"Error procesando valor de horas '{valor_str}': {str(e)}")
         return 0.0
 
-def cargar_planning_propuesto(fecha_inicio):
+def cargar_planning_propuesto(fecha_inicio, carpeta="Planning"):
     """
-    Carga el planning propuesto para una fecha específica.
+    Carga el archivo de planning propuesto para la fecha especificada.
     
     Args:
-        fecha_inicio: Fecha de inicio del planning en formato datetime
+        fecha_inicio: Fecha de inicio de la planificación (datetime)
+        carpeta: Carpeta donde buscar el archivo (default: "Planning")
         
     Returns:
-        DataFrame con el planning propuesto o None si no existe
+        DataFrame con el planning propuesto o None si no se encuentra
     """
     try:
-        # Formatear la fecha para buscar el archivo
-        fecha_str = fecha_inicio.strftime('%d-%m-%y')
-        nombre_archivo = f"Planning propuesto {fecha_str}.csv"
+        # Formatear fecha para buscar archivo
+        fecha_str = fecha_inicio.strftime('%d-%m-%Y')
+        
+        # Construir la ruta al archivo en la carpeta Planning
+        ruta_archivo = os.path.join(carpeta, f'Planning propuesto {fecha_str}.csv')
         
         # Verificar si existe el archivo
-        if not os.path.exists(nombre_archivo):
-            logger.info(f"No se encontró el archivo de planning propuesto: {nombre_archivo}")
+        if not os.path.exists(ruta_archivo):
+            logger.warning(f"No se encontró el archivo de planning propuesto: {ruta_archivo}")
             return None
             
-        # Cargar el archivo CSV sin conversión automática de tipos
-        df_propuesto = pd.read_csv(
-            nombre_archivo, 
-            sep=';', 
-            encoding='latin1'
-        )
+        logger.info(f"Cargando planning propuesto: {ruta_archivo}")
         
-        # Convertir columnas numéricas manualmente
-        if 'Horas' in df_propuesto.columns:
-            df_propuesto['Horas_float'] = df_propuesto['Horas'].apply(procesar_horas_string)
-        
-        if 'Cajas' in df_propuesto.columns:
-            df_propuesto['Cajas_float'] = df_propuesto['Cajas'].apply(procesar_horas_string)
-            
-        logger.info(f"Planning propuesto cargado: {len(df_propuesto)} registros")
-        
+        # Cargar el archivo
+        df_propuesto = pd.read_csv(ruta_archivo, sep=';', encoding='utf-8-sig')
         return df_propuesto
+        
     except Exception as e:
         logger.error(f"Error cargando planning propuesto: {str(e)}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def comparar_calendarios(df_propuesto, df_calendario, fecha_inicio, fecha_dataset):
