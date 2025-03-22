@@ -1,29 +1,29 @@
-﻿Fecha;Dia;COD_ART;NOM_ART;COD_GRU;Horas;Cajas;Total_Horas_Dia
-13-01-2025;1;434721;Bollito Easy;VIME;17,0;1949;24,0
-13-01-2025;1;453251;Panecillo 100% Integral;VIME;7,0;706;24,0
-14-01-2025;2;453251;Panecillo 100% Integral;VIME;4,0;404;24,0
-14-01-2025;2;430401;Mini Panecillo Easy;VIME;5,5;630;24,0
-14-01-2025;2;431610;Bollito 100% Integral Easy Pack 8 unidades;VIME;10,0;1156;24,0
-14-01-2025;2;432211;Pepito con Salvado Easy;MEC;4,5;636;24,0
-15-01-2025;3;432211;Pepito con Salvado Easy;MEC;1,5;212;23,5
-15-01-2025;3;432111;Pepito Sin Sal Añadida Easy;MEC;4,0;565;23,5
-15-01-2025;3;430621;Pepito Easy;MEC;3,0;424;23,5
-15-01-2025;3;403801;Mini Viena Andaluza;MEC;4,0;699;23,5
-15-01-2025;3;434201;Viena Easy;MEC;3,0;473;23,5
-15-01-2025;3;432821;Pan Bocadillo Easy;MEC;2,0;289;23,5
-15-01-2025;3;406301;Viena Mondat con Salvado 145 gr;MEC;2,0;381;23,5
-15-01-2025;3;400231;Pepito;MEC;2,0;272;23,5
-15-01-2025;3;432311;Pepito con Salvado Sin Sal Añadida Easy;MEC;2,0;283;23,5
-16-01-2025;4;432911;Panecito con Salvado Easy;MEC;2,0;269;24,0
-16-01-2025;4;432421;Bollo Easy;MEC;2,0;254;24,0
-16-01-2025;4;423321;Mollete;MEC;2,0;265;24,0
-16-01-2025;4;406401;Viena con Salvado Pequeña;MEC;2,0;350;24,0
-16-01-2025;4;423301;Mollete Pack 4 UDS;MEC;2,0;284;24,0
-16-01-2025;4;401301;Baguette Plus;MEC;2,0;273;24,0
-16-01-2025;4;400121;Miniatura;MEC;2,0;334;24,0
-16-01-2025;4;434011;Panecito Sin Sal Añadida Easy;MEC;2,0;269;24,0
-16-01-2025;4;401881;Bollo;MEC;2,0;349;24,0
-16-01-2025;4;5720811;Baguetina Cereales;VIME;6,0;546;24,0
-17-01-2025;5;5720811;Baguetina Cereales;VIME;16,5;1502;20,5
-17-01-2025;5;423111;Panecillo con Cereales y Semillas;VIME;2,0;265;20,5
-17-01-2025;5;435711;Rombito Integral 100%;VIME;2,0;208;20,5
+﻿Fecha;Dia;COD_ART;NOM_ART;COD_GRU;Horas;Cajas
+13-01-2025;1;434721;Bollito Easy;VIME;17,0;1949
+13-01-2025;1;453251;Panecillo 100% Integral;VIME;7,0;706
+14-01-2025;2;453251;Panecillo 100% Integral;VIME;4,0;404
+14-01-2025;2;430401;Mini Panecillo Easy;VIME;5,5;630
+14-01-2025;2;431610;Bollito 100% Integral Easy Pack 8 unidades;VIME;6,5;751
+14-01-2025;2;432211;Pepito con Salvado Easy;MEC;6,0;848
+14-01-2025;2;432111;Pepito Sin Sal Añadida Easy;MEC;2,0;282
+15-01-2025;3;432111;Pepito Sin Sal Añadida Easy;MEC;2,0;282
+15-01-2025;3;430621;Pepito Easy;MEC;3,0;424
+15-01-2025;3;403801;Mini Viena Andaluza;MEC;4,0;699
+15-01-2025;3;434201;Viena Easy;MEC;2,5;394
+15-01-2025;3;432821;Pan Bocadillo Easy;MEC;2,0;289
+15-01-2025;3;406301;Viena Mondat con Salvado 145 gr;MEC;2,0;381
+15-01-2025;3;400231;Pepito;MEC;2,0;272
+15-01-2025;3;432311;Pepito con Salvado Sin Sal Añadida Easy;MEC;2,0;283
+15-01-2025;3;432911;Panecito con Salvado Easy;MEC;2,0;269
+15-01-2025;3;432421;Bollo Easy;MEC;2,0;254
+16-01-2025;4;423321;Mollete;MEC;2,0;265
+16-01-2025;4;406401;Viena con Salvado Pequeña;MEC;2,0;350
+16-01-2025;4;423301;Mollete Pack 4 UDS;MEC;2,0;284
+16-01-2025;4;401301;Baguette Plus;MEC;2,0;273
+16-01-2025;4;400121;Miniatura;MEC;2,0;334
+16-01-2025;4;434011;Panecito Sin Sal Añadida Easy;MEC;2,0;269
+16-01-2025;4;401881;Bollo;MEC;2,0;349
+16-01-2025;4;5720811;Baguetina Cereales;VIME;10,0;910
+17-01-2025;5;5720811;Baguetina Cereales;VIME;12,5;1138
+17-01-2025;5;423111;Panecillo con Cereales y Semillas;VIME;2,0;265
+17-01-2025;5;435711;Rombito Integral 100%;VIME;2,0;208

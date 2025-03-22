@@ -9,8 +9,8 @@
     },
     "Horas": {
         "Propuesto": 128.0,
-        "Calendario": 116.0,
-        "Diferencia": -12.0
+        "Calendario": 112.0,
+        "Diferencia": -16.0
     },
     "Distribucion Dias": {
         "Propuesto": {
@@ -26,7 +26,7 @@
             "2": 24.0,
             "3": 23.5,
             "4": 24.0,
-            "5": 20.5
+            "5": 16.5
         }
     },
     "Distribucion Grupos": {
@@ -35,8 +35,8 @@
             "VIME": 48.0
         },
         "Calendario": {
-            "MEC": 46.0,
-            "VIME": 70.0
+            "MEC": 45.5,
+            "VIME": 66.5
         }
     },
     "Diferencias Productos": {
@@ -85,10 +85,15 @@
             "Calendario": 2.0,
             "Diferencia": -1.0
         },
+        "434201": {
+            "Propuesto": 3.0,
+            "Calendario": 2.5,
+            "Diferencia": -0.5
+        },
         "431610": {
             "Propuesto": 2.0,
-            "Calendario": 10.0,
-            "Diferencia": 8.0
+            "Calendario": 6.5,
+            "Diferencia": 4.5
         }
     }
 }

@@ -1,0 +1,49 @@
+﻿COD_ART;NOM_ART;COD_GRU;Estado;Orden_Planificacion;Demanda_Media;Stock_Inicial;Cajas_a_Producir;Horas_Necesarias;Cobertura_Inicial;Cobertura_Final;Cobertura_Final_Est;Total_Palets;Total_Stock
+434721;Bollito Easy;VIME;Planificado;INICIO;34,47;175,13;1949;17,0;5,08;61,63;-1,92;75,86;2124,13
+453251;Panecillo 100% Integral;VIME;Planificado;INICIO;106,4;826,4;1110;11,0;7,77;18,2;0,77;69,16;1936,4
+430401;Mini Panecillo Easy;VIME;Planificado;INICIO;38,5;563,0;630;5,5;14,62;30,99;7,62;42,61;1193,0
+431610;Bollito 100% Integral Easy Pack 8 unidades;VIME;Planificado;INICIO;12,85;364,59;751;6,5;28,37;86,8;21,37;39,84;1115,59
+432211;Pepito con Salvado Easy;MEC;Planificado;;53,81;777,77;848;6,0;14,45;30,21;7,45;67,74;1625,77
+432111;Pepito Sin Sal Añadida Easy;MEC;Planificado;;11,39;170,43;565;4,0;14,96;64,55;7,96;26,27;735,43
+430621;Pepito Easy;MEC;Planificado;;93,3;1499,8;424;3,0;16,08;20,62;9,08;80,16;1923,8
+403801;Mini Viena Andaluza;MEC;Planificado;;6,6;113,6;699;4,0;17,21;123,12;10,21;29,02;812,6
+434201;Viena Easy;MEC;Planificado;;41,55;810,79;394;2,5;19,51;29,0;12,51;43,03;1204,79
+432821;Pan Bocadillo Easy;MEC;Planificado;;27,3;728,8;289;2,0;26,7;37,28;19,7;36,35;1017,8
+406301;Viena Mondat con Salvado 145 gr;MEC;Planificado;;17,1;578,6;381;2,0;33,84;56,12;26,84;34,27;959,6
+400231;Pepito;MEC;Planificado;;14,1;523,0;272;2,0;37,09;56,38;30,09;28,39;795,0
+432311;Pepito con Salvado Sin Sal Añadida Easy;MEC;Planificado;;10,09;407,64;283;2,0;40,41;68,46;33,41;24,67;690,64
+432911;Panecito con Salvado Easy;MEC;Planificado;;7,9;325,4;269;2,0;41,19;75,24;34,19;21,23;594,4
+432421;Bollo Easy;MEC;Planificado;;13,9;620,4;254;2,0;44,63;62,91;37,63;31,23;874,4
+423321;Mollete;MEC;Planificado;;16,7;825,65;265;2,0;49,44;65,31;42,44;38,95;1090,65
+406401;Viena con Salvado Pequeña;MEC;Planificado;;10,9;541,4;350;2,0;49,67;81,78;42,67;31,84;891,4
+423301;Mollete Pack 4 UDS;MEC;Planificado;;1,9;102,4;284;2,0;53,89;203,37;46,89;13,8;386,4
+401301;Baguette Plus;MEC;Planificado;;9,6;733,95;273;2,0;76,45;104,89;69,45;35,96;1006,95
+400121;Miniatura;MEC;Planificado;;5,97;539,03;334;2,0;90,34;146,32;83,34;24,25;873,03
+434011;Panecito Sin Sal Añadida Easy;MEC;Planificado;;3,25;336,02;269;2,0;103,51;186,38;96,51;21,61;605,02
+401881;Bollo;MEC;Planificado;;3,4;356,4;349;2,0;104,82;207,47;97,82;25,19;705,4
+5720811;Baguetina Cereales;VIME;Planificado;FINAL;205,4;846,8;2048;22,5;4,12;14,09;-2,88;103,39;2894,8
+423111;Panecillo con Cereales y Semillas;VIME;Planificado;FINAL;8,0;436,45;265;2,0;54,56;87,68;47,56;19,48;701,45
+435711;Rombito Integral 100%;VIME;Planificado;FINAL;2,6;166,6;208;2,0;64,08;144,08;57,08;10,41;374,6
+453243;Panecillo 100% Integral;VIME;No válido;INICIO;11,7;1068,2;0;0,0;91,3;0,0;84,3;38,15;1068,2
+433701;Bollito Easy Pack de 8 Uds;VIME;No válido;INICIO;1,2;792,2;0;0,0;660,17;0,0;653,17;28,29;792,2
+421702;Barra de Viena Ecológica Easy;MEC;No válido;INICIO;0,0;629,0;0;0,0;0,0;0,0;0,0;22,46;629,0
+421802;Bollo Ecológico Easy;MEC;No válido;INICIO;0,0;645,4;0;0,0;0,0;0,0;0,0;23,05;645,4
+422002;Barra de Viena 15%  Integral  Ecológico Easy;MEC;No válido;INICIO;0,0;367,0;0;0,0;0,0;0,0;0,0;13,11;367,0
+430702;Panecito Ecológico Easy;MEC;No válido;INICIO;7,3;1714,8;0;0,0;234,9;0,0;227,9;61,24;1714,8
+406002;Panecito Integral 100% Ecológico Easy;MEC;No válido;INICIO;0,1;552,9;0;0,0;5529,0;0,0;5522,0;19,75;552,9
+430101;Pan Bocadillo Sin Sal Añadida Easy;MEC;No válido;;0,0;56,0;0;0,0;0,0;0,0;0,0;2,0;56,0
+432501;Pan Bocadillo con Salvado Easy;MEC;No válido;;0,0;0,0;0;0,0;0,0;0,0;0,0;0,0;0,0
+434111;Panecito con Salvado Sin Sal Añadida Easy;MEC;No válido;;0,0;643,0;0;0,0;0,0;0,0;0,0;22,96;643,0
+402011;Viena Mondat 145 gr;MEC;No válido;;56,5;1307,4;0;0,0;23,14;0,0;16,14;46,69;1307,4
+403341;Barra de Viena;MEC;No válido;;26,9;1239,35;514;2,5;46,07;0,0;39,07;62,62;1753,35
+5718619;Pulguita;MEC;No válido;;49,24;2911,63;0;0,0;59,13;0,0;52,13;103,99;2911,63
+430731;Panecito Easy;MEC;No válido;;25,5;1616,0;0;0,0;63,37;0,0;56,37;57,71;1616,0
+401111;Bocata;MEC;No válido;;16,42;1189,28;0;0,0;72,44;0,0;65,44;42,47;1189,28
+604301;Pepito Easy Pack 5 uds;MEC;No válido;;1,5;209,0;0;0,0;139,33;0,0;132,33;7,46;209,0
+436701;Mollete Multicereal con Quinoa (3%);MEC;No válido;;0,1;24,6;0;0,0;246,0;0,0;239,0;0,88;24,6
+425351;Payesito Mondat;MEC;No válido;;1,19;423,09;0;0,0;355,54;0,0;348,54;11,75;423,09
+405121;Miniatura con Salvado;MEC;No válido;;0,25;427,0;0;0,0;1708,0;0,0;1701,0;11,86;427,0
+5718540;Panecillo con  Semillas;VIME;No válido;FINAL;82,75;1676,74;0;0,0;20,26;0,0;13,26;59,88;1676,74
+407411;Bollo Rústico Semillado;VIME;No válido;FINAL;0,7;133,2;0;0,0;190,29;0,0;183,29;4,76;133,2
+438801;Panecillo con Semillas;VIME;No válido;FINAL;0,55;195,79;0;0,0;353,7;0,0;346,7;6,99;195,79
+423611;Alcachofa Semillada con Sésamo 4,35%;VIME;No válido;FINAL;0,2;242,2;0;0,0;1211,0;0,0;1204,0;6,73;242,2

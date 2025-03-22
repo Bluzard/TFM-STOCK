@@ -53,15 +53,21 @@ def cargar_planning_propuesto(fecha_inicio, carpeta="Planning"):
         DataFrame con el planning propuesto o None si no se encuentra
     """
     try:
-        # Formatear fecha para buscar archivo
-        fecha_str = fecha_inicio.strftime('%d-%m-%Y')
+        # Formatear fecha para buscar archivo (en dos formatos posibles)
+        fecha_str_largo = fecha_inicio.strftime('%d-%m-%Y')  # Formato DD-MM-YYYY
+        fecha_str_corto = fecha_inicio.strftime('%d-%m-%y')  # Formato DD-MM-YY
         
-        # Construir la ruta al archivo en la carpeta Planning
-        ruta_archivo = os.path.join(carpeta, f'Planning propuesto {fecha_str}.csv')
+        # Construir rutas a ambos posibles archivos
+        ruta_archivo_largo = os.path.join(carpeta, f'Planning propuesto {fecha_str_largo}.csv')
+        ruta_archivo_corto = os.path.join(carpeta, f'Planning propuesto {fecha_str_corto}.csv')
         
-        # Verificar si existe el archivo
-        if not os.path.exists(ruta_archivo):
-            logger.warning(f"No se encontró el archivo de planning propuesto: {ruta_archivo}")
+        # Verificar si existe alguno de los archivos
+        if os.path.exists(ruta_archivo_largo):
+            ruta_archivo = ruta_archivo_largo
+        elif os.path.exists(ruta_archivo_corto):
+            ruta_archivo = ruta_archivo_corto
+        else:
+            logger.warning(f"No se encontró el archivo de planning propuesto para fecha {fecha_str_largo} o {fecha_str_corto}")
             return None
             
         logger.info(f"Cargando planning propuesto: {ruta_archivo}")

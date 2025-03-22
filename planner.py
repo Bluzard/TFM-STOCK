@@ -1302,8 +1302,7 @@ def exportar_calendario(calendario, fecha_inicio, nombre_archivo):
                     'NOM_ART': producto['nom_art'],
                     'COD_GRU': producto['cod_gru'],
                     'Horas': round(horas, 1),  # Redondear a 1 decimal (0.5)
-                    'Cajas': round(producto['cajas'], 2),
-                    'Total_Horas_Dia': round(total_horas_dia, 1)  # Redondear a 1 decimal (0.5)
+                    'Cajas': round(producto['cajas'], 2)
                 })
         
         # Exportar a CSV
