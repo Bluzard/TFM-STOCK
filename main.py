@@ -8,6 +8,7 @@ import os
 from csv_loader import leer_dataset, leer_pedidos_pendientes, verificar_dataset_existe
 from planner import calcular_formulas, aplicar_simplex, exportar_resultados, verificar_pedidos
 from comparador import cargar_planning_propuesto, comparar_calendarios, generar_mensaje_comparacion
+from PIL import Image, ImageTk 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 class PlannerGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Planificación de Producción")
+        self.root.title("Opti-Planner")
         self.root.geometry("600x450")
         
         # Variables
@@ -27,6 +28,7 @@ class PlannerGUI:
         self.dias_cobertura = tk.StringVar(value="7")  # Valor por defecto
         
         self.create_widgets()
+        self.load_image("imagen_logo.png") 
         
     def create_widgets(self):
         # Frame principal con padding
@@ -83,6 +85,19 @@ class PlannerGUI:
         # Botón comparar resultado
         ttk.Button(main_frame, text="Comparar Resultado", command=self.comparar_resultado).grid(row=9, column=1, pady=10)
 
+        # Label para la imagen logo
+        self.image_label = tk.Label(self.root)
+        self.image_label.grid(row=10, column=0, columnspan=3, pady=10, padx=255)
+   
+    def load_image(self, image_path):
+        """Carga y muestra una imagen en la interfaz."""
+        try:
+            image = Image.open(image_path)
+            image = image.resize((100, 100), Image.LANCZOS)  # Redimensionar para ajustarse a la ventana
+            self.img_tk = ImageTk.PhotoImage(image)
+            self.image_label.config(image=self.img_tk)
+        except Exception as e:
+            print(f"Error al cargar la imagen: {e}")
 
         
     def browse_file(self):
