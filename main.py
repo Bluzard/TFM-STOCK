@@ -74,7 +74,7 @@ class PlannerGUI:
         self.combo_dias_cobertura = ttk.Combobox(main_frame, textvariable=self.dias_cobertura, 
                                               values=["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], 
                                               width=10, state="readonly")
-        self.combo_dias_cobertura.current(7)  # Seleccionar 3 por defecto
+        self.combo_dias_cobertura.current(4)  # Seleccionar 3 por defecto
         self.combo_dias_cobertura.grid(row=6, column=1, sticky=tk.W)
         
         # Botón generar
